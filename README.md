@@ -16,7 +16,7 @@ just doctor
 just build           # 调用 make all，生成 ELF：kernel-rv、kernel-la
 just run-rv          # 构建 → 启动 → 输出日志 → SBI 关机
 just run-la          # 构建 → 启动 → 输出日志 → 停放 CPU（关机未实现）
-just check           # 只检查格式和双架构 Clippy，不代表功能测试通过
+just check           # 检查格式和双架构 Clippy
 ```
 
 `make all` 使用 Cargo 的 `--locked --offline`，不负责下载工具链；先完成[环境准备](docs/getting-started/environment.md)。普通的 `cargo build` 没有指定裸机 target，不是本项目的构建入口。
@@ -53,4 +53,4 @@ just judge-build      # 原始比赛镜像，断网、独立 Cargo 缓存构建�
 - 当前内核没有第三方 Rust 依赖，构建使用仓库内的 Cargo.lock。
 - 比赛 `make all` 不依赖 just、Docker 或 Dev Container 配置。
 - 开发命令直接写在 Justfile 中，构建逻辑集中在 Makefile。
-- 仓库公开、HTTPS 提交、最终启动参数及评分规则仍须以比赛平台为准。本地 `just judge-build` 不是官方评分器。
+- 仓库公开、HTTPS 提交、最终启动参数及评分规则以比赛平台为准。

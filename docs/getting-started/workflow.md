@@ -7,7 +7,7 @@ just
 just doctor
 just build                    # 调用 make all，双架构 release ELF
 just build-rv debug           # 单架构 debug ELF
-just check                    # 格式与双架构 Clippy，不是功能测试
+just check                    # 格式与双架构 Clippy
 just run-rv                   # 构建 release、启动、输出、关机
 just run-la                   # 构建 release、启动、输出、停放（关机待实现）
 MEM=128M SMP=1 just run-rv
@@ -33,6 +33,6 @@ LoongArch 对应 `just debug-la` / `kernel-la`。不向公网暴露 GDB 端口�
 
 ## 手动验证与清理
 
-RISC-V 应看到启动日志并正常退出；LoongArch 应看到启动和未实现关机提示，需要 `Ctrl-a` 后按 `x` 退出。看到日志不等于官方用户态测试通过。
+RISC-V 应看到启动日志并正常退出；LoongArch 应看到启动和未实现关机提示，需要 `Ctrl-a` 后按 `x` 退出。
 
-宿主可执行 `just judge-build`，在原始比赛镜像禁网构建；它不启动 QEMU，也不运行测试。`just clean` 只清理构建产物，不删除测试盘或日志。
+宿主可执行 `just judge-build`，在原始比赛镜像禁网构建。`just clean` 只清理构建产物，保留测试盘和日志。各命令的覆盖范围见[开发检查](../testing/README.md)。

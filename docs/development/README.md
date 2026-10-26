@@ -1,7 +1,7 @@
 # 开发约定
 
 - 内核使用 Rust 2021、`no_std`、panic abort；通过 Makefile 指定裸机 target。
-- 合并前运行 `just check` 并手动验证启动，提交前运行宿主侧 `just judge-build`；它们不代表功能测试通过。不能跑的检查必须注明原因。每个 target/recipe 的职责见[分工表](targets.md)。
+- 合并前运行 `just check` 并手动验证启动，提交前运行宿主侧 `just judge-build`。命令职责见[分工表](targets.md)，检查范围见[开发检查](../testing/README.md)。
 - unsafe 必须说明地址、权限、生命周期、别名或中断状态等安全前提；不要用裸指针掩盖资源所有权设计。
 - 硬件/架构代码留在边界；共享业务代码不遍布 `cfg(target_arch)`。
 - 当前控制台只支持单启动 CPU；引入中断/多核输出前先解决同步与重入。
