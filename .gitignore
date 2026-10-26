@@ -1,0 +1,10 @@
+/target/
+/kernel-rv
+/kernel-la
+/disk.img
+/disk-la.img
+/artifacts/*
+!/artifacts/README.md
+*.img.xz
+__pycache__/
+*.pyc

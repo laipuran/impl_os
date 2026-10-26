@@ -1,0 +1,27 @@
+{
+  "name": "impl_os · OS Contest 2026",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "runArgs": ["--platform=linux/amd64"],
+  "remoteUser": "root",
+  "updateRemoteUserUID": false,
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/impl_os,type=bind",
+  "workspaceFolder": "/workspace/impl_os",
+  "postCreateCommand": "just doctor",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "ms-vscode.cpptools"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
+        "rust-analyzer.check.allTargets": false,
+        "rust-analyzer.cargo.buildScripts.enable": true
+      }
+    }
+  }
+}
