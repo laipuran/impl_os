@@ -1,8 +1,8 @@
 # impl_os
 
-面向 2026 OS 内核实现赛的 Rust 内核项目基架。借鉴相邻 `rCore-Tutorial-v3` 的开发组织方式，但不复制其代码，也不使用其旧版 QEMU/自带固件作为比赛环境。
+面向 OS 内核实现赛的 Rust `no_std` 内核，支持 RISC-V 和 LoongArch 两个构建目标。
 
-**当前是启动基架，不是已通过比赛测试的操作系统。** 尚未实现用户态、系统调用、EXT4、VirtIO、调度或网络。两架构已在比赛指定原始镜像完成离线构建和串口冒烟；RISC-V 关机成功，LoongArch 关机未实现，详见[测试状态](docs/testing/README.md)。
+当前内核只包含启动、BSS 初始化、早期串口输出和停机入口。RISC-V 使用 SBI 关机；LoongArch 的关机入口停放 CPU。
 
 ## 开始开发
 
@@ -27,15 +27,14 @@ just check           # 只检查格式和双架构 Clippy，不代表功能测�
 |---|---|
 | `.devcontainer/` | VS Code 开发容器，固定比赛镜像 tag + digest |
 | `os/` | `no_std` Rust 内核；架构启动、链接脚本、通用代码 |
-| `tests/` | 预留真实内核回归测试，目前只有说明 |
-| `docs/` | 环境、架构、开发约定、测试、路线图与调研 |
+| `docs/` | 当前架构、环境、开发命令和检查说明 |
 | `artifacts/` | 被忽略的本地测试镜像、串口日志等大文件 |
 | `target/` | Cargo 生成目录，不提交 |
 | `Makefile` | 本地开发与比赛 `make all` 的统一入口 |
 | `justfile` | 开发任务编排；构建委托 Make，不复制构建逻辑 |
 | `rust-toolchain.toml` | 固定 Rust nightly、裸机 targets 与组件 |
 
-命令职责见[任务分工表](docs/development/targets.md)，详细模块边界见[代码结构](docs/architecture/layout.md)，文档导航见 [docs/README.md](docs/README.md)。官方测试源码的研究见[工具链与测试调研](docs/competition-toolchain-and-tests.md)。
+命令职责见[任务分工表](docs/development/targets.md)，模块边界见[代码结构](docs/architecture/layout.md)。完整导航见 [docs/README.md](docs/README.md)。
 
 不用 VS Code 时，在**宿主**执行（需要 Docker、just）：
 
@@ -51,7 +50,7 @@ just judge-build      # 原始比赛镜像，断网、独立 Cargo 缓存构建�
 
 - 根目录 `make all` 生成 ELF，不以 raw binary 替代。
 - 构建不依赖 `.cargo/` 或 `.vscode/` 等隐藏配置：链接参数来自 `os/build.rs`，因此隐藏目录被评测过滤后仍可构建。
-- 当前没有第三方 Rust 依赖；未来引入依赖时必须提交锁文件及必要源码并验证离线构建。
+- 当前内核没有第三方 Rust 依赖，构建使用仓库内的 Cargo.lock。
 - 比赛 `make all` 不依赖 just、Docker 或 Dev Container 配置。
-- 开发命令直接写在 Justfile 中，没有项目自带的 Python 工具或工具单元测试。
+- 开发命令直接写在 Justfile 中，构建逻辑集中在 Makefile。
 - 仓库公开、HTTPS 提交、最终启动参数及评分规则仍须以比赛平台为准。本地 `just judge-build` 不是官方评分器。

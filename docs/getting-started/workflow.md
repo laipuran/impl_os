@@ -15,23 +15,7 @@ MEM=128M SMP=1 just run-rv
 
 比赛直接执行 `make all`，不依赖 Just。每个命令的完整职责见[分工表](../development/targets.md)。不要并发运行同一架构的 debug/release 导出操作，因为根目录 ELF 同名。
 
-## 挂载官方测试盘
-
-参数直接传给 QEMU，不再使用 Python 封装。先取得版本匹配并解压的 raw EXT4 镜像，记录 SHA256：
-
-```bash
-just run-rv \
-  -drive file=artifacts/test-images/sdcard-rv.img,if=none,format=raw,id=x0 \
-  -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
-
-just run-la \
-  -drive file=artifacts/test-images/sdcard-la.img,if=none,format=raw,id=x0 \
-  -device virtio-blk-pci,drive=x0
-```
-
-可选辅助盘使用 `id=x1`；RISC-V 块设备接 `virtio-mmio-bus.1`，LoongArch 使用 PCI 设备自动连接 PCI 总线。不要照搬历史说明中 PCI 设备接 MMIO 总线的错误参数。
-
-**当前内核不能读取测试盘或执行用户态测试。** 磁盘默认可写，使用可丢弃副本，或在上述命令末尾追加 QEMU 原生参数 `-snapshot`。
+`run-*` 和 `debug-*` 的额外参数直接传给 QEMU，使用其原生选项。
 
 ## GDB
 

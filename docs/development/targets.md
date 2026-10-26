@@ -3,7 +3,7 @@
 ## 原则
 
 - **Make：产物契约。** 只编译、导出、清理比赛 ELF；评测机只需 `make all`。
-- **Just：开发命令。** 直接调用 Rust、Docker、QEMU 工具；构建委托 Make，不再通过 Python 脚本转发。
+- **Just：开发命令。** 直接调用 Rust、Docker、QEMU 工具；构建委托 Make。
 - 环境安装与构建分开；检查格式与检查功能分开。不以开发工具检查冒充内核测试。
 
 ## Make：共四个 target
@@ -37,9 +37,7 @@
 | `debug-rv [QEMU 参数…]` | 构建 debug ELF，QEMU 暂停并监听 GDB `:1234` |
 | `debug-la [QEMU 参数…]` | 同上，LoongArch |
 
-运行时用环境变量 `MEM`、`SMP` 设置内存/核数，默认 1G/1。额外参数就是 QEMU 原生参数，不再提供自定义 `--test-disk` 等选项。
-
-原 `test`、`smoke`、`verify`、`judge-check` 已随 Python 工具移除，没有另写 Shell 工具框架替代。
+运行时用环境变量 `MEM`、`SMP` 设置内存/核数，默认 1G/1。额外参数直接传给 QEMU，使用其原生选项。
 
 ## Just：宿主任务
 
