@@ -10,3 +10,8 @@ RUN curl -fL --retry 3 "https://github.com/casey/just/releases/download/${JUST_V
     && echo "${JUST_SHA256}  /tmp/just.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/just.tar.gz -C /usr/local/bin just \
     && rm /tmp/just.tar.gz
+
+COPY rust-toolchain.toml /tmp/impl-os-rust-toolchain.toml
+RUN toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/impl-os-rust-toolchain.toml) \
+    && rustup component add --toolchain "$toolchain" rust-analyzer rust-src \
+    && rm /tmp/impl-os-rust-toolchain.toml

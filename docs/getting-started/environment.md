@@ -3,7 +3,7 @@
 ## 固定环境
 
 - 基础镜像：`zhouzhouyi/os-contest:20260510`，Dev Container 固定 digest，避免 tag 漂移。
-- 开发镜像：从上述原始镜像派生，仅安装校验 SHA256 的 just **1.40.0**；不替换 QEMU/GCC/固件。
+- 开发镜像：从上述原始镜像派生，安装校验 SHA256 的 just **1.40.0**，以及固定 Rust 工具链配套的 `rust-analyzer`、`rust-src`；不替换编译器、QEMU 或固件。
 - 开发语言：Rust；`nightly-2025-01-18`，edition 2021。
 - 目标：`riscv64gc-unknown-none-elf`、`loongarch64-unknown-none`。
 - 无第三方 crate；不需要 `cargo install` 或通过交叉 GCC 链接当前内核。
@@ -15,7 +15,9 @@
 1. Docker 可运行 Linux/amd64 容器；安装 VS Code Dev Containers 扩展。
 2. 打开仓库，执行 **Reopen in Container**。
 3. 初次下载镜像约 6 GB，留出镜像解包和构建空间。容器平台固定 Linux/amd64，ARM 宿主需要额外的宿主架构仿真。
-4. 构建薄开发镜像时只安装 just，完成后自动执行 `just doctor`。doctor 只读检查，缺少必需开发工具时失败。
+4. 构建开发镜像时准备 just 和 Rust 编辑器组件，完成后自动执行 `just doctor`。doctor 只读检查，缺少必需开发工具时失败。
+
+VS Code 使用 `/root/.cargo/bin/rust-analyzer`，由 rustup 选择项目固定工具链的语言服务器，而不是扩展自带的较新版本。`rust-src` 用于分析 `core` 等标准库代码。这两个组件只属于开发环境，不加入比赛构建的 `rust-toolchain.toml` 组件要求。
 
 容器用 `root` 是因为官方工具链位于 `/root/.cargo` 和 `/root/.rustup`，不盲目替换用户以免丢失预装环境。在 Linux bind mount 上生成文件可能属于 root；不要对整个仓库递归改权限，必要时仅修正自己的生成文件。
 

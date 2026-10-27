@@ -24,18 +24,14 @@
 | 默认 `just` | 列出任务，不构建、不安装 |
 | `setup` | 显式联网准备固定 Rust、targets、开发组件；禁止 rustup 自更新 |
 | `doctor` | 只读检查环境，缺工具即失败；不自动安装 |
-| `build [MODE=debug]` | 转发给 `make all` |
-| `build-rv [release\|debug]` | 转发给 `make kernel-rv MODE=...` |
-| `build-la [release\|debug]` | 转发给 `make kernel-la MODE=...` |
+| `build [all\|rv\|la] [release\|debug]` | 默认构建双架构 release，按参数转发给对应 Make 目标 |
 | `clean` | 转发给 `make clean` |
 | `fmt` | 修改 Rust 源码格式 |
 | `fmt-check` | 只检查格式 |
 | `lint` | 两个裸机 target 的 Clippy，不导出根目录 ELF |
 | `check` | 组合 `fmt-check` 和 `lint` |
-| `run-rv [QEMU 参数…]` | 构建 release ELF，直接启动 RISC-V QEMU |
-| `run-la [QEMU 参数…]` | 同上，LoongArch；关机未实现 |
-| `debug-rv [QEMU 参数…]` | 构建 debug ELF，QEMU 暂停并监听 GDB `:1234` |
-| `debug-la [QEMU 参数…]` | 同上，LoongArch |
+| `run <rv\|la> [QEMU 参数…]` | 构建所选架构的 release ELF，启动 QEMU |
+| `debug <rv\|la> [QEMU 参数…]` | 构建所选架构的 debug ELF，QEMU 暂停并监听 GDB `:1234` |
 
 运行时用环境变量 `MEM`、`SMP` 设置内存/核数，默认 1G/1。额外参数直接传给 QEMU，使用其原生选项。
 
@@ -44,7 +40,7 @@
 | Recipe | 职责 |
 |---|---|
 | `image-pull` | 显式拉取固定 digest 的比赛原始镜像 |
-| `image-build` | 构建 `impl-os-dev:20260510`：原始镜像只补充固定版本 just |
+| `image-build` | 构建 `impl-os-dev:20260510`：原始镜像补充固定版本 just、配套 rust-analyzer 和标准库源码 |
 | `container [命令…]` | 进入开发容器或执行命令，不隐式 pull；仅终端交互时加 `-it` |
 | `judge-build` | 原始镜像禁网，使用容器临时 Cargo 缓存执行 `make all`，输出两个 ELF 到工作区 |
 

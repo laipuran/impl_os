@@ -6,21 +6,21 @@
 just
 just doctor
 just build                    # 调用 make all，双架构 release ELF
-just build-rv debug           # 单架构 debug ELF
+just build rv debug           # 单架构 debug ELF；双架构用 just build all debug
 just check                    # 格式与双架构 Clippy
-just run-rv                   # 构建 release、启动、输出、关机
-just run-la                   # 构建 release、启动、输出、停放（关机待实现）
-MEM=128M SMP=1 just run-rv
+just run rv                   # 构建 release、启动、输出、关机
+just run la                   # 构建 release、启动、输出、停放（关机待实现）
+MEM=128M SMP=1 just run rv
 ```
 
 比赛直接执行 `make all`，不依赖 Just。每个命令的完整职责见[分工表](../development/targets.md)。不要并发运行同一架构的 debug/release 导出操作，因为根目录 ELF 同名。
 
-`run-*` 和 `debug-*` 的额外参数直接传给 QEMU，使用其原生选项。
+`run` 和 `debug` 的第一个参数选择架构，额外参数直接传给 QEMU，使用其原生选项。
 
 ## GDB
 
 ```bash
-just debug-rv                 # 构建 debug ELF，QEMU 暂停，监听容器内 :1234
+just debug rv                 # 构建 debug ELF，QEMU 暂停，监听容器内 :1234
 # 第二个容器终端：
 gdb-multiarch kernel-rv
 # GDB 内：
@@ -29,7 +29,7 @@ break kernel_main
 continue
 ```
 
-LoongArch 对应 `just debug-la` / `kernel-la`。不向公网暴露 GDB 端口。
+LoongArch 对应 `just debug la` / `kernel-la`。不向公网暴露 GDB 端口。
 
 ## 手动验证与清理
 

@@ -1,3 +1,4 @@
 *
 !.devcontainer/
 !.devcontainer/Dockerfile
+!rust-toolchain.toml

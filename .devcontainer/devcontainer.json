@@ -18,6 +18,7 @@
         "ms-vscode.cpptools"
       ],
       "settings": {
+        "rust-analyzer.server.path": "/root/.cargo/bin/rust-analyzer",
         "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
         "rust-analyzer.check.allTargets": false,
         "rust-analyzer.cargo.buildScripts.enable": true

@@ -15,7 +15,7 @@ default:
 
 # [Container] Explicit online Rust setup; never a build dependency.
 setup:
-    rustup toolchain install "{{toolchain}}" --no-self-update --profile minimal --component rustfmt,clippy,llvm-tools-preview --target riscv64gc-unknown-none-elf,loongarch64-unknown-none
+    rustup toolchain install "{{toolchain}}" --no-self-update --profile minimal --component rustfmt,clippy,llvm-tools-preview,rust-analyzer,rust-src --target riscv64gc-unknown-none-elf,loongarch64-unknown-none
 
 # [Container] Read-only diagnostics; fail on missing tools, never auto-install.
 doctor:
@@ -30,21 +30,21 @@ doctor:
     rustup target list --installed --toolchain "{{toolchain}}" | grep -Fx loongarch64-unknown-none
     rustup run "{{toolchain}}" cargo fmt --version
     rustup run "{{toolchain}}" cargo clippy --version
+    rustup run "{{toolchain}}" rust-analyzer --version
     qemu-system-riscv64 --version
     qemu-system-loongarch64 --version
     gdb-multiarch --version
 
-# [Container] Build both ELF files via Make; accepts MODE=debug, etc.
-build *args:
-    make all "$@"
-
-# [Container] Build only kernel-rv; optional mode: release/debug.
-build-rv mode="release":
-    make kernel-rv MODE="$1"
-
-# [Container] Build only kernel-la; optional mode: release/debug.
-build-la mode="release":
-    make kernel-la MODE="$1"
+# [Container] Build all/rv/la via Make; optional mode: release/debug.
+build arch="all" mode="release":
+    #!/bin/sh
+    set -eu
+    case "$1" in
+        all) target=all ;;
+        rv|la) target="kernel-$1" ;;
+        *) echo 'architecture must be all, rv or la' >&2; exit 2 ;;
+    esac
+    exec make "$target" MODE="$2"
 
 # [Container] Remove generated build artifacts only, via Make.
 clean:
@@ -66,27 +66,30 @@ lint:
 # [Container] Static checks only; not kernel tests or boot verification.
 check: fmt-check lint
 
-# [Container] Build release RISC-V and boot; args are native QEMU options.
-run-rv *args: build-rv
-    {{rv}} -kernel kernel-rv -m "{{memory}}" -smp "{{cpus}}" "$@"
+# [Container] Build release rv/la and boot; args are native QEMU options.
+run arch *args: (build arch)
+    @just _qemu "$@"
 
-# [Container] Build release LoongArch and boot; poweroff remains unsupported.
-run-la *args: build-la
-    {{la}} -kernel kernel-la -m "{{memory}}" -smp "{{cpus}}" "$@"
+# [Container] Build debug rv/la and pause QEMU for GDB on :1234.
+debug arch *args: (build arch "debug")
+    @just _qemu "$@" -S -gdb tcp::1234
 
-# [Container] Build a debug ELF and pause QEMU for GDB on :1234.
-debug-rv *args: (build-rv "debug")
-    {{rv}} -kernel kernel-rv -m "{{memory}}" -smp "{{cpus}}" -S -gdb tcp::1234 "$@"
-
-# [Container] LoongArch equivalent of debug-rv.
-debug-la *args: (build-la "debug")
-    {{la}} -kernel kernel-la -m "{{memory}}" -smp "{{cpus}}" -S -gdb tcp::1234 "$@"
+_qemu arch *args:
+    #!/bin/sh
+    set -eu
+    arch=$1
+    shift
+    case "$arch" in
+        rv) exec {{rv}} -kernel kernel-rv -m "{{memory}}" -smp "{{cpus}}" "$@" ;;
+        la) exec {{la}} -kernel kernel-la -m "{{memory}}" -smp "{{cpus}}" "$@" ;;
+        *) echo 'run/debug architecture must be rv or la' >&2; exit 2 ;;
+    esac
 
 # [Host] Explicitly download the pinned official base image.
 image-pull:
     docker pull --platform linux/amd64 "{{contest_image}}"
 
-# [Host] Build the official base + just; do not replace compilers/QEMU/firmware.
+# [Host] Add Just and matching Rust editor components; keep compilers/QEMU/firmware.
 image-build:
     docker build --platform linux/amd64 --tag "{{dev_image}}" --file .devcontainer/Dockerfile .
 

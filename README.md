@@ -7,15 +7,15 @@
 ## 开始开发
 
 1. 宿主安装 Docker、VS Code 和 Dev Containers 扩展。
-2. 打开本目录，执行 **Dev Containers: Reopen in Container**。以比赛镜像为基础，仅补充 just；首次基础镜像约 6 GB。不启用特权模式或挂载 Docker socket。
+2. 打开本目录，执行 **Dev Containers: Reopen in Container**。以比赛镜像为基础，补充 just、配套的 rust-analyzer 和标准库源码；首次基础镜像约 6 GB。不启用特权模式或挂载 Docker socket。
 3. 在容器内执行：
 
 ```bash
 just                 # 列出任务及职责
 just doctor
 just build           # 调用 make all，生成 ELF：kernel-rv、kernel-la
-just run-rv          # 构建 → 启动 → 输出日志 → SBI 关机
-just run-la          # 构建 → 启动 → 输出日志 → 停放 CPU（关机未实现）
+just run rv          # 构建 → 启动 → 输出日志 → SBI 关机
+just run la          # 构建 → 启动 → 输出日志 → 停放 CPU（关机未实现）
 just check           # 检查格式和双架构 Clippy
 ```
 
