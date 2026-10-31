@@ -38,7 +38,7 @@
 ## Just：宿主任务
 
 | Recipe | 职责 |
-|---|---|
+| --- | --- |
 | `image-pull` | 显式拉取固定 digest 的比赛原始镜像 |
 | `image-build` | 构建 `impl-os-dev:20260510`：原始镜像补充固定版本 just、配套 rust-analyzer 和标准库源码 |
 | `container [命令…]` | 进入开发容器或执行命令，不隐式 pull；仅终端交互时加 `-it` |

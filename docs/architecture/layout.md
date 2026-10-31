@@ -28,7 +28,7 @@ os/src/
 ```
 
 | 路径 | 当前职责 |
-|---|---|
+| --- | --- |
 | `main.rs` | Rust 入口、BSS 清零、启动输出、panic 处理 |
 | `console.rs` | 通过 `core::fmt::Write` 格式化文本，逐字节调用架构串口输出 |
 | `arch/mod.rs` | 按编译目标导出 `NAME`、`putchar`、`shutdown`、`halt` |
