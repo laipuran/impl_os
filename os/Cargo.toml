@@ -11,3 +11,4 @@ test = false
 bench = false
 
 [dependencies]
+log = { version = "0.4", default-features = false }

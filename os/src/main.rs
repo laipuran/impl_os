@@ -5,13 +5,15 @@
 mod arch;
 mod console;
 mod lang_items;
+mod utils;
+
 #[no_mangle]
-extern "C" fn kernel_main() -> ! {
+fn kernel_main() -> ! {
     // SAFETY: only the boot CPU enters Rust; the linker excludes its stack
     // from this BSS interval. No Rust globals are accessed before clearing it.
     unsafe { clear_bss() };
-    println!("impl_os: booted on {}", arch::NAME);
-    println!("scaffold only: userspace, EXT4 and contest tests are not implemented");
+    utils::logging::init().expect("logger initialization failed");
+    log::info!("booted on {}", arch::NAME);
     arch::shutdown()
 }
 
