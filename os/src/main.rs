@@ -4,9 +4,7 @@
 
 mod arch;
 mod console;
-
-use core::panic::PanicInfo;
-
+mod lang_items;
 #[no_mangle]
 extern "C" fn kernel_main() -> ! {
     // SAFETY: only the boot CPU enters Rust; the linker excludes its stack
@@ -29,11 +27,4 @@ unsafe fn clear_bss() {
         current.write_volatile(0);
         current = current.add(1);
     }
-}
-
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    println!("kernel panic: {}", info);
-    // Do not report a successful shutdown for a panic.
-    arch::halt()
 }
