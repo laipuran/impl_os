@@ -15,3 +15,6 @@ COPY rust-toolchain.toml /tmp/impl-os-rust-toolchain.toml
 RUN toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/impl-os-rust-toolchain.toml) \
     && rustup component add --toolchain "$toolchain" rust-analyzer rust-src \
     && rm /tmp/impl-os-rust-toolchain.toml
+
+# Rename the base image's registry settings to avoid deprecation warning in current cargo version.
+RUN mv /root/.cargo/config /root/.cargo/config.toml
