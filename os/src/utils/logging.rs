@@ -12,9 +12,9 @@ impl Log for Logger {
     fn log(&self, record: &Record<'_>) {
         if self.enabled(record.metadata()) {
             crate::println!(
-                "[{}] {}: {}",
+                "[{:>5}] {}: {}",
                 record.level(),
-                record.target(),
+                record.module_path().unwrap_or("unknown"),
                 record.args()
             );
         }
