@@ -15,32 +15,42 @@ workspace 只有 `os` 一个 crate。`build.rs` 按 target 选择对应架构的
 os/src/
   main.rs
   console.rs
+  trap.rs
   arch/
     mod.rs
     riscv64/
       mod.rs
       entry.S
+      trap.rs / trap.S
+      trap_smoke.rs / trap_smoke.S
       linker.ld
     loongarch64/
       mod.rs
       entry.S
+      trap.rs / trap.S
+      trap_smoke.rs / trap_smoke.S
       linker.ld
 ```
 
 | 路径 | 当前职责 |
 | --- | --- |
-| `main.rs` | Rust 入口、BSS 清零、启动输出、panic 处理 |
+| `main.rs` | Rust 入口、BSS 清零、日志及 trap 初始化、启动输出 |
 | `console.rs` | 通过 `core::fmt::Write` 格式化文本，逐字节调用架构串口输出 |
-| `arch/mod.rs` | 按编译目标导出 `NAME`、`putchar`、`shutdown`、`halt` |
+| `arch/mod.rs` | 按编译目标导出平台操作及 `trap` 接口 |
 | `arch/*/entry.S` | CPU 初始设置、停放非启动 CPU、设置 64 KiB 启动栈、进入 Rust |
 | `arch/*/linker.ld` | ELF 入口、代码/数据加载段、启动栈和 BSS 边界 |
 | `arch/*/mod.rs` | 嵌入入口汇编、访问平台 UART、提供停机操作 |
+| `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
+| `arch/*/trap.rs`、`trap.S` | 整数寄存器及异常状态、内核异常入口、用户态降权/返回 |
+| `arch/*/trap_smoke.rs`、`trap_smoke.S` | 显式功能控制的实际异常和特权级往返自检 |
 
 ## 执行关系
 
 ```text
 _start → kernel_main → clear_bss
+                    → trap::init → arch::trap::init
                     → console → arch::putchar
+                    → arch::trap::smoke_test（仅 trap-smoke）
                     → arch::shutdown
 panic → console → arch::halt
 ```

@@ -5,6 +5,7 @@
 mod arch;
 mod console;
 mod lang_items;
+mod trap;
 mod utils;
 
 #[no_mangle]
@@ -13,7 +14,10 @@ fn kernel_main() -> ! {
     // from this BSS interval. No Rust globals are accessed before clearing it.
     unsafe { clear_bss() };
     utils::logging::init().expect("logger initialization failed");
+    trap::init();
     log::info!("booted on {}", arch::NAME);
+    #[cfg(feature = "trap-smoke")]
+    arch::trap::smoke_test();
     arch::shutdown()
 }
 

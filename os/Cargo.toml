@@ -10,5 +10,9 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[features]
+# Explicit boot-time checks; never enable permissive user mappings by default.
+trap-smoke = []
+
 [dependencies]
 log = { version = "0.4", default-features = false }

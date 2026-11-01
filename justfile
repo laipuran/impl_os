@@ -35,8 +35,8 @@ doctor:
     qemu-system-loongarch64 --version
     gdb-multiarch --version
 
-# [Container] Build all/rv/la via Make; optional mode: release/debug.
-build arch="all" mode="release":
+# [Container] Build all/rv/la via Make; optional mode and Cargo features.
+build arch="all" mode="release" features="":
     #!/bin/sh
     set -eu
     case "$1" in
@@ -44,7 +44,7 @@ build arch="all" mode="release":
         rv|la) target="kernel-$1" ;;
         *) echo 'architecture must be all, rv or la' >&2; exit 2 ;;
     esac
-    exec make "$target" MODE="$2"
+    exec make "$target" MODE="$2" FEATURES="$3"
 
 # [Container] Remove generated build artifacts only, via Make.
 clean:
@@ -69,6 +69,10 @@ check: fmt-check lint
 # [Container] Build release rv/la and boot; args are native QEMU options.
 run arch *args: (build arch)
     @just _qemu "$@"
+
+# [Container] Run a <suite>-smoke Cargo feature in QEMU; defaults: rv/release.
+test suite arch="rv" mode="release": (build arch mode suite + "-smoke")
+    @just _qemu "{{arch}}"
 
 # [Container] Build debug rv/la and pause QEMU for GDB on :1234.
 debug arch *args: (build arch "debug")

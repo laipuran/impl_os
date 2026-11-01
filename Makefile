@@ -2,6 +2,7 @@
 
 CARGO ?= cargo
 MODE ?= release
+FEATURES ?=
 TARGET_DIR := $(CURDIR)/target
 
 ifeq ($(MODE),release)
@@ -18,11 +19,11 @@ endif
 all: kernel-rv kernel-la
 
 kernel-rv:
-	$(CARGO) build --locked --offline -p impl-os --target riscv64gc-unknown-none-elf --target-dir "$(TARGET_DIR)" $(PROFILE_ARG)
+	$(CARGO) build --locked --offline -p impl-os --target riscv64gc-unknown-none-elf --target-dir "$(TARGET_DIR)" $(PROFILE_ARG) $(if $(strip $(FEATURES)),--features "$(FEATURES)")
 	cp -- "$(TARGET_DIR)/riscv64gc-unknown-none-elf/$(MODE)/impl-os" "$@"
 
 kernel-la:
-	$(CARGO) build --locked --offline -p impl-os --target loongarch64-unknown-none --target-dir "$(TARGET_DIR)" $(PROFILE_ARG)
+	$(CARGO) build --locked --offline -p impl-os --target loongarch64-unknown-none --target-dir "$(TARGET_DIR)" $(PROFILE_ARG) $(if $(strip $(FEATURES)),--features "$(FEATURES)")
 	cp -- "$(TARGET_DIR)/loongarch64-unknown-none/$(MODE)/impl-os" "$@"
 
 clean:

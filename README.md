@@ -2,7 +2,7 @@
 
 面向 OS 内核实现赛的 Rust `no_std` 内核，支持 RISC-V 和 LoongArch 两个构建目标。
 
-当前内核只包含启动、BSS 初始化、早期串口输出和停机入口。RISC-V 使用 SBI 关机；LoongArch 的关机入口停放 CPU。
+当前内核包含启动、BSS 初始化、早期串口、双架构整数 trap 上下文保存/恢复及用户态特权级往返。尚无用户地址空间隔离、进程加载或调度；RISC-V 使用 SBI 关机，LoongArch 的关机入口停放 CPU。
 
 ## 开始开发
 
@@ -17,6 +17,7 @@ just build           # 调用 make all，生成 ELF：kernel-rv、kernel-la
 just run rv          # 构建 → 启动 → 输出日志 → SBI 关机
 just run la          # 构建 → 启动 → 输出日志 → 停放 CPU（关机未实现）
 just check           # 检查格式和双架构 Clippy
+just test trap       # 可选：trap smoke；默认 rv release，可追加 la 或 la debug
 ```
 
 `make all` 使用 Cargo 的 `--locked --offline`，不负责下载工具链；先完成[环境准备](docs/getting-started/environment.md)。普通的 `cargo build` 没有指定裸机 target，不是本项目的构建入口。
