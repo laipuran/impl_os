@@ -8,6 +8,8 @@ _start:
     .option norelax
     la gp, __global_pointer$
     .option pop
+    # Kernel ABI uses no TLS; trap entry restores this fixed kernel tp.
+    li tp, 0
     la sp, boot_stack_top
     tail kernel_main
 .Lpark:

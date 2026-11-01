@@ -25,6 +25,7 @@ just run rv          # 构建并在 QEMU 中运行 RISC-V 内核
 just run la          # 构建并在 QEMU 中运行 LoongArch 内核
 just debug rv        # 构建 debug 内核，等待 GDB 连接 :1234
 just check           # 检查格式和双架构 Clippy，不执行启动测试
+just test trap       # 可选：trap smoke；默认 rv release，可追加 la 或 la debug
 ```
 
 RISC-V 启动后通过 SBI 请求关机；LoongArch 启动后停放 CPU，QEMU 不会自动退出，可按 `Ctrl-a x` 退出。

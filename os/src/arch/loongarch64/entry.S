@@ -20,6 +20,8 @@ _start:
     csrrd $t0, 0x20
     bnez $t0, .Lpark
     la.local $sp, boot_stack_top
+    # No TLS is installed; trap initialization retains this kernel ABI tp.
+    move $tp, $zero
     b kernel_main
 .Lpark:
     idle 0
