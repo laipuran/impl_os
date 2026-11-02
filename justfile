@@ -1,4 +1,4 @@
-# Make owns kernel artifacts; Just directly runs development commands.
+# Make 负责内核产物；Just 直接运行开发命令。
 set positional-arguments
 
 contest_image := `sed -n 's/^ARG CONTEST_IMAGE=//p' .devcontainer/Dockerfile`
@@ -15,15 +15,15 @@ cpus := env_var_or_default("SMP", "1")
 rv := "qemu-system-riscv64 -machine virt -bios default -nographic -no-reboot -rtc base=utc -device virtio-net-device,netdev=net,bus=virtio-mmio-bus.2 -netdev user,id=net"
 la := "qemu-system-loongarch64 -machine virt -nographic -no-reboot -rtc base=utc -device virtio-net-pci,netdev=net -netdev user,id=net"
 
-# List tasks; does not build or install anything.
+# 列出任务；不构建或安装任何内容。
 default:
     @just --list
 
-# [Container] Explicit online Rust setup; never a build dependency.
+# [容器] 显式联网配置 Rust；不作为构建依赖。
 setup:
     rustup toolchain install "{{toolchain}}" --no-self-update --profile minimal --component rustfmt,clippy,llvm-tools-preview,rust-analyzer,rust-src --target riscv64gc-unknown-none-elf,loongarch64-unknown-none
 
-# [Container] Read-only diagnostics; fail on missing tools, never auto-install.
+# [容器] 只读诊断；缺少工具时失败，不自动安装。
 doctor:
     #!/bin/sh
     set -eu
@@ -41,7 +41,7 @@ doctor:
     qemu-system-loongarch64 --version
     gdb-multiarch --version
 
-# [Container] Build all/rv/la via Make; optional mode: release/debug.
+# [容器] 通过 Make 构建 all/rv/la；可选模式：release/debug。
 build arch="all" mode="release":
     #!/bin/sh
     set -eu
@@ -52,31 +52,31 @@ build arch="all" mode="release":
     esac
     exec make "$target" MODE="$2"
 
-# [Container] Remove generated build artifacts only, via Make.
+# [容器] 通过 Make 仅删除生成的构建产物。
 clean:
     make clean
 
-# [Container] Format Rust sources (modifies files).
+# [容器] 格式化 Rust 源码（会修改文件）。
 fmt:
     cargo fmt --all
 
-# [Container] Check formatting without modifying files.
+# [容器] 检查格式，不修改文件。
 fmt-check:
     cargo fmt --all -- --check
 
-# [Container] Clippy on both bare-metal targets; no exported ELF files.
+# [容器] 对两个裸机目标运行 Clippy；不导出 ELF 文件。
 lint:
     cargo clippy --locked --offline -p impl-os --target riscv64gc-unknown-none-elf -- -D warnings
     cargo clippy --locked --offline -p impl-os --target loongarch64-unknown-none -- -D warnings
 
-# [Container] Static checks only; not kernel tests or boot verification.
+# [容器] 仅进行静态检查；不执行内核测试或启动验证。
 check: fmt-check lint
 
-# [Container] Build release rv/la and boot; args are native QEMU options.
+# [容器] 构建 release 模式的 rv/la 并启动；参数使用 QEMU 原生选项。
 run arch *args: (build arch)
     @just _qemu "$@"
 
-# [Container] Build debug rv/la and pause QEMU for GDB on :1234.
+# [容器] 构建 debug 模式的 rv/la，暂停 QEMU 并在 :1234 等待 GDB。
 debug arch *args: (build arch "debug")
     @just _qemu "$@" -S -gdb tcp::1234
 
@@ -91,15 +91,15 @@ _qemu arch *args:
         *) echo 'run/debug architecture must be rv or la' >&2; exit 2 ;;
     esac
 
-# [Host] Explicitly download the pinned official base image.
+# [宿主] 显式下载固定版本的官方基础镜像。
 image-pull:
     docker pull --platform linux/amd64 "{{contest_image}}"
 
-# [Host] Cache Linux host IDs and tools in the image, never at container startup.
+# [宿主] 在镜像构建时缓存 Linux 宿主 UID/GID 和工具，不在容器启动时配置。
 image-build:
     docker build --platform linux/amd64 --build-arg "DEV_UID={{dev_uid}}" --build-arg "DEV_GID={{dev_gid}}" --tag "{{dev_image}}" --file .devcontainer/Dockerfile .
 
-# [Host] Run as the image's dev user; never migrate ownership or auto-pull.
+# [宿主] 使用镜像的 dev 用户运行；不迁移文件属主，也不自动拉取镜像。
 container *command:
     #!/bin/sh
     set -eu
@@ -108,7 +108,7 @@ container *command:
     if [ -t 0 ] && [ -t 1 ]; then set -- -it "$@"; fi
     exec docker run --rm --pull=never --platform linux/amd64 --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os "$@"
 
-# [Host] Fresh Cargo build in the pristine official image, offline; no boot/tests.
+# [宿主] 在原始官方镜像中离线进行全新 Cargo 构建；不启动或测试。
 judge-build:
     #!/bin/sh
     set -eu

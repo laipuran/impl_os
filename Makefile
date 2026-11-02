@@ -14,7 +14,7 @@ endif
 
 .PHONY: all kernel-rv kernel-la clean
 
-# Contest entry point: always build both ELF artifacts, even if copies exist.
+# 比赛入口：始终构建两种 ELF 产物，即使副本已存在。
 all: kernel-rv kernel-la
 
 kernel-rv:

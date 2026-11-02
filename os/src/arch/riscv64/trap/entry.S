@@ -6,7 +6,7 @@
 .equ TF_SCAUSE, {scause}
 .equ TF_STVAL, {stval}
 
-# Rust supplies the layout; the index is the architectural x-register number.
+# Rust 提供布局；索引对应架构定义的 x 寄存器编号。
 .macro SAVE_GPR register, index
     sd \register, TF_GPR + \index * REG_BYTES(sp)
 .endm
@@ -16,8 +16,8 @@
 .globl __trap_entry
 .type __trap_entry, @function
 __trap_entry:
-    # Hardware neither switches stacks nor saves GPRs. This S-mode-only path
-    # requires a valid aligned kernel stack; allocating TF_SIZE keeps alignment.
+    # 硬件既不切换栈，也不保存通用寄存器。此路径仅支持 S 态，
+    # 要求有效且对齐的内核栈；分配 TF_SIZE 字节后仍保持对齐。
     addi sp, sp, -TF_SIZE
     SAVE_GPR zero, 0
     SAVE_GPR ra,   1
@@ -50,7 +50,7 @@ __trap_entry:
     SAVE_GPR t4,  29
     SAVE_GPR t5,  30
     SAVE_GPR t6,  31
-    # t0 is saved, so it can now recover the pre-trap stack pointer.
+    # t0 已保存，现在可用它计算 Trap 发生前的栈指针。
     addi t0, sp, TF_SIZE
     SAVE_GPR t0, 2
     csrr t0, sepc
@@ -61,7 +61,7 @@ __trap_entry:
     sd t0, TF_SCAUSE(sp)
     csrr t0, stval
     sd t0, TF_STVAL(sp)
-    # Re-establish the kernel ABI only after capturing the interrupted values.
+    # 只有保存被打断时的寄存器值后，才重新建立内核 ABI。
     .option push
     .option norelax
     la gp, __global_pointer$
@@ -69,7 +69,7 @@ __trap_entry:
     li tp, 0
     mv a0, sp
     call {handler}
-    # The handler never returns.
+    # 处理函数不会返回。
 .Ltrap_park:
     wfi
     j .Ltrap_park

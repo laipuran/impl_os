@@ -9,8 +9,8 @@ mod utils;
 
 #[no_mangle]
 fn kernel_main() -> ! {
-    // SAFETY: only the boot CPU enters Rust; the linker excludes its stack
-    // from this BSS interval. No Rust globals are accessed before clearing it.
+    // 安全性：只有启动 CPU 进入 Rust；链接器将其栈排除在
+    // 此 BSS 区间之外。清零之前不访问任何 Rust 全局变量。
     unsafe { clear_bss() };
 
     #[cfg(target_arch = "riscv64")]
@@ -30,7 +30,7 @@ unsafe fn clear_bss() {
     let mut current = core::ptr::addr_of_mut!(sbss);
     let end = core::ptr::addr_of_mut!(ebss);
     while current < end {
-        // Volatile stores avoid lowering this loop to an unavailable memset.
+        // 易失写入可避免将此循环转换为尚不可用的 memset 调用。
         current.write_volatile(0);
         current = current.add(1);
     }

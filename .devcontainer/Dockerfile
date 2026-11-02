@@ -1,9 +1,9 @@
-# Single source for the contest image; Just reads this default too.
+# 比赛镜像的唯一配置源；Just 也读取此默认值。
 ARG CONTEST_IMAGE=zhouzhouyi/os-contest:20260510@sha256:85dec949df7cef41fd03d30c6ad69f952204540e18d2c62bced9d2e262fef12d
 FROM ${CONTEST_IMAGE}
 
-# Only add developer tools; do not replace the contest's QEMU/GCC/firmware.
-# SHA256 is from casey/just's official 1.40.0 release SHA256SUMS.
+# 只添加开发工具；不替换比赛的 QEMU/GCC/固件。
+# SHA256 来自 casey/just 官方 1.40.0 版本的 SHA256SUMS。
 ARG JUST_VERSION=1.40.0
 ARG JUST_SHA256=181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
 RUN curl -fL --retry 3 "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/just.tar.gz \

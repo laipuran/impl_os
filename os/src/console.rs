@@ -14,7 +14,7 @@ impl Write for Console {
     }
 }
 
-// Boot-only console: concurrent writers and interrupt contexts are not yet supported.
+// 仅供启动阶段使用的控制台：尚不支持并发写入和中断上下文。
 pub fn print(args: fmt::Arguments<'_>) {
     Console.write_fmt(args).unwrap();
 }

@@ -1,7 +1,7 @@
-/// Synchronous exception codes from the RISC-V scause register.
+/// RISC-V scause 寄存器中的同步异常编号。
 ///
-/// Interrupts use a different code space and must be distinguished before
-/// conversion. Unknown exception codes remain available in the raw scause.
+/// 中断使用不同的编号空间，必须在转换前
+/// 加以区分。未知异常编号仍保留在原始 scause 中。
 #[derive(Clone, Copy, Debug)]
 #[repr(usize)]
 pub(super) enum Exception {

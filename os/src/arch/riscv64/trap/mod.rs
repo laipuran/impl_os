@@ -1,9 +1,9 @@
-//! Single-hart S-mode trap diagnostics on the interrupted kernel stack.
+//! 在被打断的内核栈上执行单 hart 的 S 态 Trap 诊断。
 //!
-//! Entry requires a valid, 16-byte-aligned kernel sp with room for the frame
-//! and Rust handler. Integer registers and trap CSRs are captured before Rust;
-//! gp is restored to the kernel base and tp to zero (no kernel TLS). Interrupts
-//! stay disabled. There is no user stack switch, nested-fault recovery or return.
+//! 入口要求内核 sp 有效且按 16 字节对齐，并为现场
+//! 和 Rust 处理函数留足空间。进入 Rust 前保存整数寄存器和 Trap CSR；
+//! gp 恢复为内核基址，tp 恢复为零（内核不使用 TLS）。中断
+//! 保持关闭。不切换用户栈，不支持嵌套异常恢复或返回。
 
 use core::arch::{asm, global_asm};
 
@@ -11,8 +11,8 @@ mod cause;
 
 use cause::Exception;
 
-/// Integer-only diagnostic snapshot; no user stack switching or resume yet.
-/// `gpr[n]` is architectural register xn; gpr[2] holds the interrupted sp.
+/// 仅包含整数寄存器的诊断快照；尚不支持用户栈切换或恢复执行。
+/// `gpr[n]` 对应架构寄存器 xn；`gpr[2]` 保存被打断时的 sp。
 #[repr(C)]
 struct TrapFrame {
     gpr: [usize; 32],
@@ -25,7 +25,7 @@ struct TrapFrame {
 const _: () = {
     assert!(core::mem::size_of::<usize>() == 8);
     assert!(core::mem::size_of::<TrapFrame>() % 16 == 0);
-    // Entry allocates the frame and recovers sp using signed 12-bit ADDI.
+    // 入口使用带符号 12 位立即数的 ADDI 分配现场空间并计算原始 sp。
     assert!(core::mem::size_of::<TrapFrame>() < 2048);
 };
 
@@ -45,9 +45,9 @@ pub fn init() {
     extern "C" {
         fn __trap_entry();
     }
-    // SAFETY: the boot hart is in S-mode with a valid kernel stack. The entry
-    // is 4-byte aligned, selecting Direct mode (stvec.MODE = 0). Keep S-mode
-    // interrupts disabled; synchronous exceptions do not depend on SIE.
+    // 安全性：启动 hart 处于 S 态且内核栈有效。入口
+    // 按 4 字节对齐，选择 Direct 模式（stvec.MODE = 0）。保持 S 态
+    // 中断关闭；同步异常不依赖 SIE。
     unsafe {
         asm!(
             "csrci sstatus, 2",
@@ -72,7 +72,7 @@ extern "C" fn handle_trap(frame: &TrapFrame) -> ! {
         "U"
     };
 
-    // Bypass the logger: a trap can happen before logger initialization.
+    // 绕过日志器：Trap 可能发生在日志器初始化之前。
     crate::println!("trap: {} (interrupt={}, code={})", reason, interrupt, code);
     crate::println!(
         "  sepc={:#018x} scause={:#018x} stval={:#018x}",
