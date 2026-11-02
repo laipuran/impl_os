@@ -12,8 +12,13 @@ fn kernel_main() -> ! {
     // SAFETY: only the boot CPU enters Rust; the linker excludes its stack
     // from this BSS interval. No Rust globals are accessed before clearing it.
     unsafe { clear_bss() };
+
+    #[cfg(target_arch = "riscv64")]
+    arch::trap::init();
+
     utils::logging::init().expect("logger initialization failed");
     log::info!("booted on {}", arch::NAME);
+
     arch::shutdown()
 }
 

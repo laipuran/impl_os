@@ -1,5 +1,7 @@
 use core::arch::{asm, global_asm};
 
+pub mod trap;
+
 global_asm!(include_str!("entry.S"));
 
 pub const NAME: &str = "riscv64";

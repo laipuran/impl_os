@@ -13,9 +13,13 @@
 
 ## 当前运行行为
 
-- 共享入口清零 BSS，输出架构及基架提示，然后调用 `arch::shutdown()`。
+- 共享入口清零 BSS、初始化日志并输出架构，然后调用 `arch::shutdown()`。RISC-V 在日志初始化前安装 S 态 Trap 入口。
 - RISC-V 使用 SBI System Reset 关机；固件不支持时停放 CPU。
 - LoongArch 输出未实现关机提示并停放 CPU，需要手动退出 QEMU。
 - panic 输出错误并停放 CPU，不走正常关机路径。
 
 RISC-V 正常启动应输出日志后退出 QEMU。LoongArch 的持续运行是当前停放逻辑，不代表已经完成主动关机。
+
+## 当前 Trap 能力边界
+
+目前仅支持有效内核栈上的 S 态 Trap 诊断：保存整数寄存器及 `sepc/sstatus/scause/stval`，不修改返回 PC，不执行 `sret`。尚无用户栈切换、浮点现场恢复或嵌套异常兜底，不能用于用户程序运行或内核栈溢出恢复。
