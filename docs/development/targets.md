@@ -41,8 +41,8 @@
 | --- | --- |
 | `image-pull` | 显式拉取固定 digest 的比赛原始镜像 |
 | `image-build` | 构建 `impl-os-dev:20260510`：原始镜像补充固定版本 just、配套 rust-analyzer 和标准库源码 |
-| `container [命令…]` | 进入开发容器或执行命令，不隐式 pull；仅终端交互时加 `-it` |
-| `judge-build` | 原始镜像禁网，使用容器临时 Cargo 缓存执行 `make all`，输出两个 ELF 到工作区 |
+| `container [命令…]` | 动态匹配宿主 UID/GID 后以普通用户执行命令，不隐式 pull；仅终端交互时加 `-it` |
+| `judge-build` | 原始镜像禁网、独立临时构建目录执行 `make all`；仅将导出的 root ELF 所有权交还宿主用户 |
 
 基础镜像唯一来源是 `.devcontainer/Dockerfile` 的 `ARG CONTEST_IMAGE`，VS Code 和 Just 共用该 Dockerfile。
 

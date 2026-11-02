@@ -5,8 +5,9 @@
     "context": ".."
   },
   "runArgs": ["--platform=linux/amd64"],
-  "remoteUser": "root",
-  "updateRemoteUserUID": false,
+  "containerUser": "dev",
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/impl_os,type=bind",
   "workspaceFolder": "/workspace/impl_os",
   "postCreateCommand": "just doctor",
@@ -18,7 +19,7 @@
         "ms-vscode.cpptools"
       ],
       "settings": {
-        "rust-analyzer.server.path": "/root/.cargo/bin/rust-analyzer",
+        "rust-analyzer.server.path": "/home/dev/.cargo/bin/rust-analyzer",
         "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
         "rust-analyzer.check.allTargets": false,
         "rust-analyzer.cargo.buildScripts.enable": true

@@ -18,3 +18,29 @@ RUN toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/impl-os-rust-toolchain.
 
 # Rename the base image's registry settings to avoid deprecation warning in current cargo version.
 RUN mv /root/.cargo/config /root/.cargo/config.toml
+
+# Reuse the base image's ordinary account; its IDs are only image defaults.
+# Dev Containers or entrypoint.sh matches them to each Linux host at runtime.
+RUN usermod --login dev --home /home/dev --move-home ubuntu \
+    && groupmod --new-name dev ubuntu \
+    && mkdir -p /home/dev/.rustup/toolchains
+
+# Keep only this project's toolchain in the developer's writable home. Do not
+# copy all the unrelated toolchains bundled in the contest image (~12 GiB).
+COPY rust-toolchain.toml /tmp/impl-os-rust-toolchain.toml
+RUN toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/impl-os-rust-toolchain.toml) \
+    && mv /root/.cargo /home/dev/.cargo \
+    && cp /root/.rustup/settings.toml /home/dev/.rustup/settings.toml \
+    && mv "/root/.rustup/toolchains/${toolchain}-x86_64-unknown-linux-gnu" /home/dev/.rustup/toolchains/ \
+    && chown -R dev:dev /home/dev \
+    && rm /tmp/impl-os-rust-toolchain.toml
+
+ENV HOME=/home/dev \
+    CARGO_HOME=/home/dev/.cargo \
+    RUSTUP_HOME=/home/dev/.rustup
+ENV PATH="/home/dev/.cargo/bin:${PATH}"
+COPY .devcontainer/entrypoint.sh /usr/local/bin/impl-os-entrypoint
+RUN chmod 755 /usr/local/bin/impl-os-entrypoint
+USER dev
+ENTRYPOINT ["/usr/local/bin/impl-os-entrypoint"]
+CMD ["bash"]

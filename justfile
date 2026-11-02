@@ -93,15 +93,26 @@ image-pull:
 image-build:
     docker build --platform linux/amd64 --tag "{{dev_image}}" --file .devcontainer/Dockerfile .
 
-# [Host] Enter the development image or execute a command; never auto-pull.
+# [Host] Match the host UID/GID, then run as dev; never auto-pull.
 container *command:
     #!/bin/sh
     set -eu
     if [ "$#" -eq 0 ]; then set -- bash; fi
-    set -- --entrypoint /usr/bin/env "{{dev_image}}" "$@"
+    set -- --user 0:0 --env "LOCAL_UID=$(id -u)" --env "LOCAL_GID=$(id -g)" "{{dev_image}}" "$@"
     if [ -t 0 ] && [ -t 1 ]; then set -- -it "$@"; fi
     exec docker run --rm --pull=never --platform linux/amd64 --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os "$@"
 
 # [Host] Fresh Cargo build in the pristine official image, offline; no boot/tests.
 judge-build:
-    docker run --rm --pull=never --platform linux/amd64 --network none --env RUSTUP_AUTO_INSTALL=0 --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os --entrypoint make "{{contest_image}}" all TARGET_DIR=/tmp/impl-os-judge-target
+    #!/bin/sh
+    set -eu
+    docker run --rm --pull=never --platform linux/amd64 --network none --env RUSTUP_AUTO_INSTALL=0 --env "LOCAL_UID=$(id -u)" --env "LOCAL_GID=$(id -g)" --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os --entrypoint /bin/sh "{{contest_image}}" -c '
+        # Keep the pristine image and its root-only toolchain. Only exported
+        # ELF files touch the workspace; repair their ownership even on failure.
+        trap '\''for file in kernel-rv kernel-la; do
+            if [ -f "$file" ] && [ ! -L "$file" ]; then
+                chown --from=0 "$LOCAL_UID:$LOCAL_GID" "$file"
+            fi
+        done'\'' EXIT
+        make all TARGET_DIR=/tmp/impl-os-judge-target
+    '

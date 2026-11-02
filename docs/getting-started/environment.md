@@ -17,9 +17,17 @@
 3. 初次下载镜像约 6 GB，留出镜像解包和构建空间。容器平台固定 Linux/amd64，ARM 宿主需要额外的宿主架构仿真。
 4. 构建开发镜像时准备 just 和 Rust 编辑器组件，完成后自动执行 `just doctor`。doctor 只读检查，缺少必需开发工具时失败。
 
-VS Code 使用 `/root/.cargo/bin/rust-analyzer`，由 rustup 选择项目固定工具链的语言服务器，而不是扩展自带的较新版本。`rust-src` 用于分析 `core` 等标准库代码。这两个组件只属于开发环境，不加入比赛构建的 `rust-toolchain.toml` 组件要求。
+VS Code 使用 `/home/dev/.cargo/bin/rust-analyzer`，由 rustup 选择项目固定工具链的语言服务器，而不是扩展自带的较新版本。`rust-src` 用于分析 `core` 等标准库代码。这两个组件只属于开发环境，不加入比赛构建的 `rust-toolchain.toml` 组件要求。
 
-容器用 `root` 是因为官方工具链位于 `/root/.cargo` 和 `/root/.rustup`，不盲目替换用户以免丢失预装环境。在 Linux bind mount 上生成文件可能属于 root；不要对整个仓库递归改权限，必要时仅修正自己的生成文件。
+开发容器使用普通用户 `dev`，自动匹配宿主 UID/GID，无需个人配置。已有容器需要执行 **Dev Containers: Rebuild Container**；终端用户重新执行 `just image-build`。
+
+如果旧容器留下了 root 所有的文件，先关闭旧容器，再在宿主仓库根确认清单并修复一次：
+
+```bash
+find "$PWD" -xdev -uid 0 -print
+# 确认处于自己的仓库，且清单都是旧容器生成的文件后执行：
+sudo find "$PWD" -xdev -uid 0 -exec chown --no-dereference "$(id -u):$(id -g)" {} +
+```
 
 不启用 `--privileged`、不挂载 Docker socket、不暴露 GDB 端口。
 
