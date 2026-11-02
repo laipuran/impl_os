@@ -2,7 +2,8 @@
   "name": "impl_os · OS Contest 2026",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".."
+    "context": "..",
+    "options": ["--platform=linux/amd64"]
   },
   "runArgs": ["--platform=linux/amd64"],
   "containerUser": "dev",

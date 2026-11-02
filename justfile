@@ -3,6 +3,12 @@ set positional-arguments
 
 contest_image := `sed -n 's/^ARG CONTEST_IMAGE=//p' .devcontainer/Dockerfile`
 dev_image := "impl-os-dev:20260510"
+# Export before the shell starts so MSYS cannot rewrite container paths.
+export MSYS_NO_PATHCONV := if os() == "windows" { "1" } else { env_var_or_default("MSYS_NO_PATHCONV", "") }
+export MSYS2_ARG_CONV_EXCL := if os() == "windows" { "*" } else { env_var_or_default("MSYS2_ARG_CONV_EXCL", "") }
+# Only Linux bind mounts require host IDs; Git Bash IDs are not Linux IDs.
+dev_uid := if os() == "linux" { `id -u` } else { "1000" }
+dev_gid := if os() == "linux" { `id -g` } else { "1000" }
 toolchain := `sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml`
 memory := env_var_or_default("MEM", "1G")
 cpus := env_var_or_default("SMP", "1")
@@ -89,16 +95,16 @@ _qemu arch *args:
 image-pull:
     docker pull --platform linux/amd64 "{{contest_image}}"
 
-# [Host] Add Just and matching Rust editor components; keep compilers/QEMU/firmware.
+# [Host] Cache Linux host IDs and tools in the image, never at container startup.
 image-build:
-    docker build --platform linux/amd64 --tag "{{dev_image}}" --file .devcontainer/Dockerfile .
+    docker build --platform linux/amd64 --build-arg "DEV_UID={{dev_uid}}" --build-arg "DEV_GID={{dev_gid}}" --tag "{{dev_image}}" --file .devcontainer/Dockerfile .
 
-# [Host] Match the host UID/GID, then run as dev; never auto-pull.
+# [Host] Run as the image's dev user; never migrate ownership or auto-pull.
 container *command:
     #!/bin/sh
     set -eu
     if [ "$#" -eq 0 ]; then set -- bash; fi
-    set -- --user 0:0 --env "LOCAL_UID=$(id -u)" --env "LOCAL_GID=$(id -g)" "{{dev_image}}" "$@"
+    set -- "{{dev_image}}" "$@"
     if [ -t 0 ] && [ -t 1 ]; then set -- -it "$@"; fi
     exec docker run --rm --pull=never --platform linux/amd64 --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os "$@"
 
@@ -106,12 +112,12 @@ container *command:
 judge-build:
     #!/bin/sh
     set -eu
-    docker run --rm --pull=never --platform linux/amd64 --network none --env RUSTUP_AUTO_INSTALL=0 --env "LOCAL_UID=$(id -u)" --env "LOCAL_GID=$(id -g)" --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os --entrypoint /bin/sh "{{contest_image}}" -c '
+    docker run --rm --pull=never --platform linux/amd64 --network none --env RUSTUP_AUTO_INSTALL=0 --env "LOCAL_UID={{dev_uid}}" --env "LOCAL_GID={{dev_gid}}" --mount "type=bind,source={{justfile_directory()}},target=/workspace/impl_os" --workdir /workspace/impl_os --entrypoint /bin/sh "{{contest_image}}" -c '
         # Keep the pristine image and its root-only toolchain. Only exported
         # ELF files touch the workspace; repair their ownership even on failure.
         trap '\''for file in kernel-rv kernel-la; do
             if [ -f "$file" ] && [ ! -L "$file" ]; then
-                chown --from=0 "$LOCAL_UID:$LOCAL_GID" "$file"
+                chown "$LOCAL_UID:$LOCAL_GID" "$file"
             fi
         done'\'' EXIT
         make all TARGET_DIR=/tmp/impl-os-judge-target

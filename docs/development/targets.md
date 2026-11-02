@@ -17,6 +17,8 @@
 
 日常变量：`CARGO`、`MODE=release|debug`。`TARGET_DIR` 可由命令行覆盖，用于原始镜像中的独立缓存构建。所有目标为 phony，源码增量判断交给 Cargo；链接参数唯一来源为 `os/build.rs`。
 
+调整支持架构或 Rust target 时，同步核对 `rust-toolchain.toml` 的目标列表、Makefile 的产物映射、Just 的 `setup` / `doctor` / `lint` / QEMU 命令，以及 `os/build.rs` 和架构实现。各入口保留各自职责，不另建一套构建逻辑。
+
 ## Just：容器内任务
 
 | Recipe | 职责 |
@@ -40,9 +42,9 @@
 | Recipe | 职责 |
 | --- | --- |
 | `image-pull` | 显式拉取固定 digest 的比赛原始镜像 |
-| `image-build` | 构建 `impl-os-dev:20260510`：原始镜像补充固定版本 just、配套 rust-analyzer 和标准库源码 |
-| `container [命令…]` | 动态匹配宿主 UID/GID 后以普通用户执行命令，不隐式 pull；仅终端交互时加 `-it` |
-| `judge-build` | 原始镜像禁网、独立临时构建目录执行 `make all`；仅将导出的 root ELF 所有权交还宿主用户 |
+| `image-build` | 构建 `impl-os-dev:20260510`：补充开发工具，并缓存 Linux 宿主 UID/GID；其他宿主使用 `1000:1000` |
+| `container [命令…]` | 直接以镜像中的 `dev` 用户执行，不迁移所有权、不隐式 pull；仅终端交互时加 `-it` |
+| `judge-build` | 原始镜像禁网、独立临时构建目录执行 `make all`；导出 ELF 使用 Linux 宿主 UID/GID，其他宿主使用 `1000:1000` |
 
 基础镜像唯一来源是 `.devcontainer/Dockerfile` 的 `ARG CONTEST_IMAGE`，VS Code 和 Just 共用该 Dockerfile。
 
