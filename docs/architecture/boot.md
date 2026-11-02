@@ -5,7 +5,7 @@
 1. QEMU 加载 ELF，进入 `_start`。
 2. 架构汇编停放非启动 CPU，设置启动栈，跳转 `kernel_main`。
 3. Rust 用 volatile stores 清零 `sbss..ebss`，避免依赖尚未提供的 memset。
-4. 输出架构和“仅为基架”提示，调用架构关机入口。
+4. RISC-V 安装 Trap 入口，然后初始化日志、输出架构并调用架构关机入口。
 
 链接脚本把 `.bss.stack` 放在 `sbss` 之前，不能在 Rust 已经使用启动栈后将它清零。启动栈固定 64 KiB。
 
@@ -13,6 +13,9 @@
 
 - QEMU virt + 默认 SBI 固件，ELF 链接/入口位于 `0x80200000`。
 - 固件通过 `a0` 传入 hart ID；只有 hart 0 进入 Rust，其他 hart 停放。
+- 入口设置内核 `gp`、`tp=0` 和启动栈；当前不使用内核 TLS。
+- 清零 BSS 后、日志初始化前安装 Direct 模式的 S 态 Trap 入口，保持 SIE 关闭。
+- Trap 使用被打断的内核栈，要求栈有效且 16 字节对齐；保存整数寄存器和异常 CSR 后重建内核 `gp/tp`，输出诊断并停放，不执行 `sret`。
 - 在分页关闭状态下访问 UART `0x10000000`。
 - 正常结束调用 SBI v0.2 System Reset 的 shutdown；不支持该扩展时停放 CPU。
 - panic 输出后停放，不伪装成功退出。

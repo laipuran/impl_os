@@ -8,6 +8,8 @@ _start:
     .option norelax
     la gp, __global_pointer$
     .option pop
+    # No kernel TLS: Rust entry and trap handlers use the same fixed tp.
+    li tp, 0
     la sp, boot_stack_top
     tail kernel_main
 .Lpark:
