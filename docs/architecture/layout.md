@@ -16,6 +16,7 @@ os/src/
   main.rs
   console.rs
   trap.rs
+  ktest.rs
   arch/
     mod.rs
     riscv64/
@@ -41,8 +42,9 @@ os/src/
 | `arch/*/linker.ld` | ELF 入口、代码/数据加载段、启动栈和 BSS 边界 |
 | `arch/*/mod.rs` | 嵌入入口汇编、访问平台 UART、提供停机操作 |
 | `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
+| `ktest.rs` | 仅在 `ktest` 构建中显式调用各模块自检，全部完成后输出总成功标记 |
 | `arch/*/trap.rs`、`trap.S` | 整数寄存器及异常状态、内核异常入口、用户态降权/返回 |
-| `arch/*/trap_smoke.rs`、`trap_smoke.S` | 显式功能控制的实际异常和特权级往返自检 |
+| `arch/*/trap_smoke.rs`、`trap_smoke.S` | `ktest` 功能控制的实际异常和特权级往返自检 |
 
 ## 执行关系
 
@@ -50,7 +52,7 @@ os/src/
 _start → kernel_main → clear_bss
                     → trap::init → arch::trap::init
                     → console → arch::putchar
-                    → arch::trap::smoke_test（仅 trap-smoke）
+                    → ktest::run_all → arch::trap::smoke_test（仅 ktest）
                     → arch::shutdown
 panic → console → arch::halt
 ```

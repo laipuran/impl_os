@@ -5,7 +5,7 @@
 1. QEMU 加载 ELF，进入 `_start`。
 2. 架构汇编停放非启动 CPU，设置启动栈，跳转 `kernel_main`。
 3. Rust 用 volatile stores 清零 `sbss..ebss`，避免依赖尚未提供的 memset。
-4. 初始化日志和 trap 向量，输出架构；启用 `trap-smoke` 时执行异常及降权往返检查。
+4. 初始化日志和 trap 向量，输出架构；启用 `ktest` 时通过 `ktest::run_all` 执行全部已接入自检，目前包括异常及降权往返检查。
 5. 调用架构关机入口；未预期的内核异常输出保存的异常状态并 panic 停机。
 
 链接脚本把 `.bss.stack` 放在 `sbss` 之前，不能在 Rust 已经使用启动栈后将它清零。启动栈固定 64 KiB。
@@ -43,7 +43,7 @@ LoongArch 缺少平台电源管理实现，因此当前启动流程不满足测�
 | RISC-V | `sret`，S → U | `sepc`、`sstatus`、`scause`、`stval` | 内核 `sscratch=0`；用户执行时指向可信内核切换帧 |
 | LoongArch | `ertn`，PLV0 → PLV3 | `ERA`、`PRMD`、`ESTAT`、`BADV` | 根据保存的特权级选择当前内核栈或 SAVE2 中的切换帧；保留 SAVE0..SAVE3 |
 
-所有整数寄存器在调用 Rust 前保存，用户栈不会用于执行内核处理代码。内核异常在当前栈上分配独立、16 字节对齐的帧，允许保存完成后的同步嵌套异常；处理结束恢复帧并返回内核。共享 `trap::handle_kernel` 默认对所有内核异常 panic；只有显式 smoke 功能识别并恢复其自身的探针。
+所有整数寄存器在调用 Rust 前保存，用户栈不会用于执行内核处理代码。内核异常在当前栈上分配独立、16 字节对齐的帧，允许保存完成后的同步嵌套异常；处理结束恢复帧并返回内核。共享 `trap::handle_kernel` 默认对所有内核异常 panic；只有 `ktest` 构建中的 trap 自检识别并恢复其自身的探针。
 
 LoongArch 另安装物理 `TLBRENTRY`，处理 refill 时从直接地址模式回到内核 DMW。此类上下文的 `cause` 最高位为 1，其余位保留 ESTAT（其中 Ecode 不是此次 refill 的原因）；PC/故障地址来自 `TLBRERA`/`TLBRBADV`，`status` 统一为 PRMD 位布局。当前只报告 refill，不遍历页表或填充 TLB。
 
@@ -52,5 +52,5 @@ LoongArch 另安装物理 `TLBRENTRY`，处理 refill 时从直接地址模式�
 - 仅支持启动 CPU、关闭中断的同步执行；没有调度、时钟/外设中断处理或系统调用分发。
 - 只保存整数状态；浮点、向量指令会异常，不提供相应上下文切换。
 - 特权级切换不等于内存隔离。尚无用户页表、进程或 ELF 加载器；调用者负责映射及保护上下文、内核栈和内核数据。
-- RISC-V 当前使用 bare 地址空间，用户访问依赖固件 PMP。LoongArch 默认 DMW0 只允许 PLV0；仅 `trap-smoke` 临时开启 PLV3 低地址直映并在结束时恢复、失效缓存翻译。该测试映射不能用于不可信程序。
+- RISC-V 当前使用 bare 地址空间，用户访问依赖固件 PMP。LoongArch 默认 DMW0 只允许 PLV0；仅 `ktest` 中的 trap 自检临时开启 PLV3 低地址直映，并在返回统一测试入口前恢复、失效缓存翻译。该测试映射不能用于不可信程序。
 - 异常入口保存完成之前的故障、内核栈溢出和不可恢复硬件异常不提供恢复保证。

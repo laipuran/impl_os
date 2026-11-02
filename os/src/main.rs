@@ -4,6 +4,8 @@
 
 mod arch;
 mod console;
+#[cfg(feature = "ktest")]
+mod ktest;
 mod lang_items;
 mod trap;
 mod utils;
@@ -16,8 +18,8 @@ fn kernel_main() -> ! {
     utils::logging::init().expect("logger initialization failed");
     trap::init();
     log::info!("booted on {}", arch::NAME);
-    #[cfg(feature = "trap-smoke")]
-    arch::trap::smoke_test();
+    #[cfg(feature = "ktest")]
+    ktest::run_all();
     arch::shutdown()
 }
 

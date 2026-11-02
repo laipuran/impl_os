@@ -76,8 +76,8 @@ check: fmt-check lint
 run arch *args: (build arch)
     @just _qemu "$@"
 
-# [Container] Run a <suite>-smoke Cargo feature in QEMU; defaults: rv/release.
-test suite arch="rv" mode="release": (build arch mode suite + "-smoke")
+# [Container] Run all kernel tests in QEMU; defaults: rv/release.
+test arch="rv" mode="release": (build arch mode "ktest")
     @just _qemu "{{arch}}"
 
 # [Container] Build debug rv/la and pause QEMU for GDB on :1234.

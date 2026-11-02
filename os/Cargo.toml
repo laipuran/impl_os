@@ -12,7 +12,7 @@ bench = false
 
 [features]
 # Explicit boot-time checks; never enable permissive user mappings by default.
-trap-smoke = []
+ktest = []
 
 [dependencies]
 log = { version = "0.4", default-features = false }

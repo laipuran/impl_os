@@ -15,7 +15,7 @@
 | `kernel-la` | Cargo 离线增量构建 LoongArch，导出 ELF |
 | `clean` | 删除 `target/` 和两个根目录 ELF，保留测试盘/日志 |
 
-日常变量：`CARGO`、`MODE=release|debug`、`FEATURES`（默认空；trap 自检使用 `trap-smoke`）。`TARGET_DIR` 可由命令行覆盖，用于原始镜像中的独立缓存构建。所有目标为 phony，源码增量判断交给 Cargo；链接参数唯一来源为 `os/build.rs`。
+日常变量：`CARGO`、`MODE=release|debug`、`FEATURES`（默认空；全部内核自检统一使用 `ktest`）。`TARGET_DIR` 可由命令行覆盖，用于原始镜像中的独立缓存构建。所有目标为 phony，源码增量判断交给 Cargo；链接参数唯一来源为 `os/build.rs`。
 
 调整支持架构或 Rust target 时，同步核对 `rust-toolchain.toml` 的目标列表、Makefile 的产物映射、Just 的 `setup` / `doctor` / `lint` / QEMU 命令，以及 `os/build.rs` 和架构实现。各入口保留各自职责，不另建一套构建逻辑。
 
@@ -33,7 +33,7 @@
 | `lint` | 两个裸机 target 的 Clippy，不导出根目录 ELF |
 | `check` | 组合 `fmt-check` 和 `lint` |
 | `run <rv\|la> [QEMU 参数…]` | 构建所选架构的 release ELF，启动 QEMU |
-| `test <测试名> [rv\|la] [release\|debug]` | 默认 rv/release；构建启用 `<测试名>-smoke` Cargo feature 的 ELF，再启动 QEMU |
+| `test [rv\|la] [release\|debug]` | 默认 rv/release；构建启用 `ktest` 的 ELF，在 QEMU 中执行所选架构的全部已接入自检 |
 | `debug <rv\|la> [QEMU 参数…]` | 构建所选架构的 debug ELF，QEMU 暂停并监听 GDB `:1234` |
 
 运行时用环境变量 `MEM`、`SMP` 设置内存/核数，默认 1G/1。额外参数直接传给 QEMU，使用其原生选项。

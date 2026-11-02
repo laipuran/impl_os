@@ -112,8 +112,8 @@ pub unsafe fn run_user(context: &mut TrapContext) {
     unsafe { riscv_run_user(context) };
 }
 
-#[cfg(feature = "trap-smoke")]
+#[cfg(feature = "ktest")]
 #[path = "trap_smoke.rs"]
 mod smoke;
-#[cfg(feature = "trap-smoke")]
+#[cfg(feature = "ktest")]
 pub use smoke::{handle_smoke_kernel, smoke_test};

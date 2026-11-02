@@ -31,7 +31,7 @@ impl TrapContext {
     /// `entry` must be a four-byte-aligned user-executable address; `stack`
     /// must be a 16-byte-aligned writable user stack top. Neither is mapped
     /// or validated here, and this mechanism provides no memory isolation.
-    #[allow(dead_code)] // Public execution API; boot only uses it in trap-smoke.
+    #[allow(dead_code)] // Public execution API; boot only uses it in ktest.
     pub fn user(entry: usize, stack: usize) -> Self {
         let mut regs = [0; 32];
         regs[3] = stack;
@@ -117,7 +117,7 @@ pub fn init() {
 /// context and the suspended kernel stack). No mappings
 /// or memory isolation are created here. FP/vector instructions intentionally
 /// trap because EUEN is zero; no extension register state is preserved.
-#[allow(dead_code)] // Public execution API; boot only uses it in trap-smoke.
+#[allow(dead_code)] // Public execution API; boot only uses it in ktest.
 pub unsafe fn run_user(context: &mut TrapContext) {
     context.status = 3;
     // SAFETY: the caller guarantees mapped state and exclusive single-CPU
@@ -130,8 +130,8 @@ extern "C" fn __loongarch_handle_kernel(context: &mut TrapContext) {
     crate::trap::handle_kernel(context);
 }
 
-#[cfg(feature = "trap-smoke")]
+#[cfg(feature = "ktest")]
 #[path = "trap_smoke.rs"]
 mod smoke;
-#[cfg(feature = "trap-smoke")]
+#[cfg(feature = "ktest")]
 pub use smoke::{handle_smoke_kernel, smoke_test};

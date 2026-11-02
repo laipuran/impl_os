@@ -15,7 +15,7 @@ pub fn init() {
 /// Interrupts stay disabled. There is no scheduler or recoverable kernel-fault
 /// policy yet; unexpected traps report the saved machine state and halt via panic.
 pub fn handle_kernel(context: &mut TrapContext) {
-    #[cfg(feature = "trap-smoke")]
+    #[cfg(feature = "ktest")]
     if trap::handle_smoke_kernel(context) {
         return;
     }
