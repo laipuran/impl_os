@@ -4,7 +4,7 @@ use super::{run_user, TrapContext};
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-global_asm!(include_str!("trap_smoke.S"));
+global_asm!(include_str!("probes.S"));
 
 extern "C" {
     fn __loongarch_smoke_kernel() -> usize;

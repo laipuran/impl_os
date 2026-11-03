@@ -19,7 +19,7 @@ fn kernel_main() -> ! {
     trap::init();
     log::info!("booted on {}", arch::NAME);
     #[cfg(feature = "ktest")]
-    ktest::run_all();
+    ktest::run();
     arch::shutdown()
 }
 

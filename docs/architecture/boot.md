@@ -5,7 +5,7 @@
 1. QEMU 加载 ELF，进入 `_start`。
 2. 架构汇编停放非启动 CPU，设置启动栈，跳转 `kernel_main`。
 3. Rust 用 volatile stores 清零 `sbss..ebss`，避免依赖尚未提供的 memset。
-4. 初始化日志和 trap 向量，输出架构；启用 `ktest` 时通过 `ktest::run_all` 执行全部已接入自检，目前包括异常及降权往返检查。
+4. 初始化日志和 trap 向量，输出架构；启用 `ktest` 时通过 `ktest::run` 按测试组列表顺序执行自检，目前包括异常及降权往返检查。
 5. 调用架构关机入口；未预期的内核异常输出保存的异常状态并 panic 停机。
 
 链接脚本把 `.bss.stack` 放在 `sbss` 之前，不能在 Rust 已经使用启动栈后将它清零。启动栈固定 64 KiB。

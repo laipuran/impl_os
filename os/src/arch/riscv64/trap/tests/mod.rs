@@ -4,7 +4,7 @@ use core::arch::{asm, global_asm};
 
 use super::{run_user, TrapContext, DISABLED_STATUS, USER_STATUS};
 
-global_asm!(include_str!("trap_smoke.S"));
+global_asm!(include_str!("probes.S"));
 
 extern "C" {
     fn riscv_smoke_kernel() -> usize;

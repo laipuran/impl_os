@@ -45,7 +45,7 @@ impl TrapContext {
     }
 }
 
-// Every literal GPR slot in trap.S is eight bytes, beginning at offset zero.
+// Every literal GPR slot in entry.S is eight bytes, beginning at offset zero.
 // CSR offsets and total frame size are substituted directly into assembly.
 const _: () = {
     assert!(core::mem::size_of::<usize>() == 8);
@@ -55,7 +55,7 @@ const _: () = {
 };
 
 global_asm!(
-    include_str!("trap.S"),
+    include_str!("entry.S"),
     frame_size = const core::mem::size_of::<TrapContext>(),
     pc = const core::mem::offset_of!(TrapContext, pc),
     status = const core::mem::offset_of!(TrapContext, status),
@@ -131,7 +131,4 @@ extern "C" fn __loongarch_handle_kernel(context: &mut TrapContext) {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "trap_smoke.rs"]
-mod smoke;
-#[cfg(feature = "ktest")]
-pub use smoke::{handle_smoke_kernel, smoke_test};
+pub(crate) mod tests;

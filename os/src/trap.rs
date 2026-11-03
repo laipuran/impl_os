@@ -16,7 +16,7 @@ pub fn init() {
 /// policy yet; unexpected traps report the saved machine state and halt via panic.
 pub fn handle_kernel(context: &mut TrapContext) {
     #[cfg(feature = "ktest")]
-    if trap::handle_smoke_kernel(context) {
+    if trap::tests::handle_smoke_kernel(context) {
         return;
     }
 

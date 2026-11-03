@@ -31,7 +31,7 @@ const _: () = {
 };
 
 global_asm!(
-    include_str!("trap.S"),
+    include_str!("entry.S"),
     context_size = const core::mem::size_of::<TrapContext>(),
     pc = const core::mem::offset_of!(TrapContext, pc),
     status = const core::mem::offset_of!(TrapContext, status),
@@ -113,7 +113,4 @@ pub unsafe fn run_user(context: &mut TrapContext) {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "trap_smoke.rs"]
-mod smoke;
-#[cfg(feature = "ktest")]
-pub use smoke::{handle_smoke_kernel, smoke_test};
+pub(crate) mod tests;
