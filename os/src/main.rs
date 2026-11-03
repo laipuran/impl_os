@@ -14,7 +14,6 @@ fn kernel_main() -> ! {
     unsafe { clear_bss() };
 
     utils::logging::init().unwrap();
-    #[cfg(target_arch = "riscv64")]
     arch::trap::init();
 
     log::info!("booted on {}", arch::NAME);

@@ -5,7 +5,7 @@
 1. QEMU 加载 ELF，进入 `_start`。
 2. 架构汇编停放非启动 CPU，设置启动栈，跳转 `kernel_main`。
 3. Rust 用 volatile stores 清零 `sbss..ebss`，避免依赖尚未提供的 memset。
-4. 初始化日志，RISC-V 安装 Trap 入口，然后输出架构并调用架构关机入口。
+4. 初始化日志，安装所选架构的 Trap 入口，然后输出架构并调用架构关机入口。
 
 链接脚本把 `.bss.stack` 放在 `sbss` 之前，不能在 Rust 已经使用启动栈后将它清零。启动栈固定 64 KiB。
 
@@ -31,6 +31,12 @@ UART 地址依赖当前分页关闭的状态；启动过程固定选择 hart 0�
 - ELF 虚拟起始地址 `0x9000000090000000`，物理加载地址 `0x90000000`。
 - QEMU 从物理地址开始执行；入口先建立 DMW0 高地址窗口及临时 DMW1 低地址窗口，再开启分页并跳到高地址，撤销临时窗口。不能先开启分页再从未映射的低地址继续取指。
 - 使用 `la.local` 的 PC-relative 地址生成，设置栈后进入共享 Rust 入口。
+- 启动入口固定 `tp=0`，关闭 EUEN 扩展；日志初始化后安装 EENTRY/TLBRENTRY，关闭中断，ECFG.VS=0。两个异常入口均按 4096 字节对齐，TLBRENTRY 使用物理地址。
+- `trap/` 与 RISC-V 保持独立但对应的结构：`cause.rs` 解析原因，`entry.S` 保存现场和切栈，`return.S` 恢复现场并 `ertn`，`mod.rs` 提供 `init`、`TrapFrame::user` 和 `enter_user`。
+- SAVE0/1 暂存入口 t0/sp，SAVE2 保存用户执行时的可信内核栈顶；按 PRMD.PPLV 区分 PLV0/PLV3，不把用户 sp 当成可信栈。整数现场按 r0..r31 保存，r3 是 sp，r2 是 tp。
+- PLV0/PLV3 的 `break` 均推进 ERA 四字节后恢复；支持现场保存完成后的可处理同步嵌套异常。`enter_user` 消费当前内核调用栈，用户异常处理后直接返回 PLV3；返回时固定用户 PRMD，中断和扩展保持关闭。
+- TLB refill 使用专用入口和 TLBRERA/TLBRPRMD/TLBRBADV，在现场的 estat bit63 添加标记，避免误用过期的 ESTAT.Ecode。默认仅诊断并停放，不填充 TLB，也不处理其他未预期异常。
+- 默认 DMW0 仅供 PLV0。调用者必须提供 PLV3 可执行/可访问映射，不能直接用内核高地址作为用户入口。当前没有内存隔离，只允许可信用户代码；不支持调度、系统调用分发、异步中断或浮点/向量现场。默认启动不进入用户态。
 - 早期 UART 假定 QEMU virt 的 `0x1fe001e0`，经 DMW0 访问。
 - 关机入口输出提示后停放 CPU，不会主动退出 QEMU。
 

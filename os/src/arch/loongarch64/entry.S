@@ -17,6 +17,9 @@ _start:
     jirl $zero, $t0, 0
 .Lmapped:
     csrwr $zero, 0x181
+    # 内核不使用 TLS，与 Trap handler 使用相同的固定 tp。
+    move $tp, $zero
+    csrwr $zero, 0x2
     csrrd $t0, 0x20
     bnez $t0, .Lpark
     la.local $sp, boot_stack_top
