@@ -1,13 +1,22 @@
 //! Feature-only real PLV0/PLV3 execution probes; never linked into normal boot.
 
+use super::cause::{ExceptionCause, InterruptCause, TrapCause};
 use super::{run_user, TrapContext};
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-global_asm!(include_str!("probes.S"));
+global_asm!(include_str!("probes.S"), run_user = sym abi_run_user);
+
+/// Give the assembly ABI probe an explicit C call boundary around Rust's API.
+unsafe extern "C" fn abi_run_user(context: *mut TrapContext) {
+    // SAFETY: the feature-only wrapper forwards its exclusively owned context;
+    // smoke_test supplies the mapped payload and keeps the kernel frame valid.
+    unsafe { run_user(&mut *context) };
+}
 
 extern "C" {
     fn __loongarch_smoke_kernel() -> usize;
+    fn __loongarch_smoke_call_abi(context: *mut TrapContext) -> usize;
     fn __loongarch_smoke_kernel_break();
     fn __loongarch_smoke_nested();
     fn __loongarch_smoke_nested_break();
@@ -36,55 +45,79 @@ fn kernel_tp() -> usize {
     tp
 }
 
-fn ecode(context: &TrapContext) -> usize {
-    (context.cause >> 16) & 0x3f
+fn decode_test() {
+    let decode = |estat| TrapCause::from_estat(estat);
+    assert_eq!(decode(1 << 11), TrapCause::Interrupt(InterruptCause::Timer));
+    let pending = (1 << 11) | 1;
+    assert_eq!(
+        decode(pending),
+        TrapCause::Interrupt(InterruptCause::Pending(pending))
+    );
+    assert_eq!(
+        decode((12 << 16) | pending),
+        TrapCause::Exception(ExceptionCause::Breakpoint)
+    );
+    assert_eq!(
+        decode((8 << 16) | (1 << 22)),
+        TrapCause::Exception(ExceptionCause::DataAddressError)
+    );
+    for (code, subcode) in [(8, 2), (12, 1), (63, 511)] {
+        assert_eq!(
+            decode((code << 16) | (subcode << 22)),
+            TrapCause::Exception(ExceptionCause::Unknown { code, subcode })
+        );
+    }
+    assert_eq!(
+        decode(REFILL | (12 << 16) | pending),
+        TrapCause::Exception(ExceptionCause::TlbRefill)
+    );
 }
 
 /// Recognize only the exact feature-only breakpoints and kernel refill probe.
 /// All other exceptions are left for the shared fatal kernel-trap handler.
 pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
-    if context.cause & REFILL != 0 {
-        if context.pc != __loongarch_smoke_refill_load as *const () as usize {
+    if context.cause() == TrapCause::Exception(ExceptionCause::TlbRefill) {
+        if context.pc() != __loongarch_smoke_refill_load as *const () as usize {
             return false;
         }
-        assert_eq!(context.status & 7, 0);
-        assert_eq!(context.bad_addr, UNMAPPED);
+        assert_eq!(context.raw_status() & 7, 0);
+        assert_eq!(context.bad_addr(), UNMAPPED);
         assert_ne!(OUTER_SP.load(Ordering::Relaxed), 0);
-        assert!(context.regs[3] < OUTER_SP.load(Ordering::Relaxed));
-        assert_eq!(context.regs[2], KERNEL_TP.load(Ordering::Relaxed));
+        assert!(context.sp() < OUTER_SP.load(Ordering::Relaxed));
+        assert_eq!(context.registers()[2], KERNEL_TP.load(Ordering::Relaxed));
         REFILL_COUNT.fetch_add(1, Ordering::Relaxed);
-        context.pc += 4;
+        context.set_pc(context.pc() + 4);
         return true;
     }
-    if ecode(context) != 12 {
+    if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
         return false;
     }
     let outer_pc = __loongarch_smoke_kernel_break as *const () as usize;
     let nested_pc = __loongarch_smoke_nested_break as *const () as usize;
-    if context.pc == nested_pc {
-        assert_eq!(context.status & 7, 0);
+    if context.pc() == nested_pc {
+        assert_eq!(context.raw_status() & 7, 0);
         assert_ne!(OUTER_SP.load(Ordering::Relaxed), 0);
-        assert!(context.regs[3] < OUTER_SP.load(Ordering::Relaxed));
-        assert_eq!(context.regs[3] & 15, 0);
-        assert_eq!(context.regs[2], KERNEL_TP.load(Ordering::Relaxed));
+        assert!(context.sp() < OUTER_SP.load(Ordering::Relaxed));
+        assert_eq!(context.sp() & 15, 0);
+        assert_eq!(context.registers()[2], KERNEL_TP.load(Ordering::Relaxed));
         NESTED_COUNT.fetch_add(1, Ordering::Relaxed);
-        context.pc += 4;
+        context.set_pc(context.pc() + 4);
         return true;
     }
-    if context.pc != outer_pc {
+    if context.pc() != outer_pc {
         return false;
     }
-    assert_eq!(context.status & 7, 0);
-    assert_eq!(context.regs[0], 0);
-    assert_eq!(context.regs[3] & 15, 0);
-    assert_eq!(context.regs[12], context.regs[3]);
-    for (register, value) in context.regs.iter().enumerate().skip(1) {
+    assert_eq!(context.raw_status() & 7, 0);
+    assert_eq!(context.registers()[0], 0);
+    assert_eq!(context.sp() & 15, 0);
+    assert_eq!(context.registers()[12], context.sp());
+    for (register, value) in context.registers().iter().enumerate().skip(1) {
         if register != 3 && register != 12 {
             assert_eq!(*value, 0x600 + register);
         }
     }
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
-    OUTER_SP.store(context.regs[3], Ordering::Relaxed);
+    OUTER_SP.store(context.sp(), Ordering::Relaxed);
     // SAFETY: this exact PLV0 breakpoint is recognized above, uses the current
     // valid kernel stack, and returns after its saved ERA is advanced.
     unsafe { __loongarch_smoke_nested() };
@@ -94,13 +127,22 @@ pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
     unsafe { __loongarch_smoke_refill(UNMAPPED) };
     assert_eq!(REFILL_COUNT.load(Ordering::Relaxed), 1);
     OUTER_SP.store(0, Ordering::Relaxed);
-    // The nested trap overwrote live exception CSRs but not the outer frame.
-    assert_eq!(context.pc, outer_pc);
-    assert_eq!(context.status & 7, 0);
-    assert_eq!(ecode(context), 12);
-    assert_eq!(context.regs[2], 0x602);
-    context.regs[4] = 0x777;
-    context.pc += 4;
+    // Nested traps overwrite live exception CSRs, not the outer saved frame.
+    assert_eq!(context.pc(), outer_pc);
+    assert_eq!(context.raw_status() & 7, 0);
+    assert_eq!(
+        context.cause(),
+        TrapCause::Exception(ExceptionCause::Breakpoint)
+    );
+    assert_eq!(context.registers()[2], 0x602);
+    // The assembly probe checks every edited GPR before restoring its caller.
+    // Keep only sp unchanged so the interrupted kernel frame remains valid.
+    for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
+        if register != 3 {
+            *value = 0x700 + register;
+        }
+    }
+    context.set_pc(context.pc() + 4);
     true
 }
 
@@ -108,12 +150,12 @@ fn user_address(address: usize) -> usize {
     address - 0x9000_0000_0000_0000
 }
 
-fn assert_user(context: &TrapContext, pc: usize, cause: usize, regs: &[usize; 32]) {
-    assert_eq!(context.pc, pc);
-    assert_eq!(context.status & 0xf, 3);
-    assert_eq!(context.cause & REFILL, 0);
-    assert_eq!(ecode(context), cause);
-    assert_eq!(&context.regs, regs);
+fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[usize; 32]) {
+    assert_eq!(context.pc(), pc);
+    assert_eq!(context.raw_status() & 0xf, 3);
+    assert_eq!(context.raw_cause() & REFILL, 0);
+    assert_eq!(context.cause(), TrapCause::Exception(cause));
+    assert_eq!(context.registers(), regs);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 }
 
@@ -123,6 +165,7 @@ fn assert_user(context: &TrapContext, pc: usize, cause: usize, regs: &[usize; 32
 /// RAM without isolation and exists ONLY for this controlled smoke payload;
 /// the original DMW1 is restored before this function reports success.
 pub fn smoke_test() {
+    decode_test();
     KERNEL_TP.store(kernel_tp(), Ordering::Relaxed);
     NESTED_COUNT.store(0, Ordering::Relaxed);
     REFILL_COUNT.store(0, Ordering::Relaxed);
@@ -130,9 +173,9 @@ pub fn smoke_test() {
     // any page tables exist; discarding reset-time TLB contents is harmless
     // and makes both intentional refill probes deterministic.
     unsafe { asm!("invtlb 0x0, $zero, $zero", options(nostack)) };
-    // SAFETY: the assembly wrapper preserves the kernel ABI, and the exact
-    // breakpoint handler validates its frame and supplies the return value.
-    assert_eq!(unsafe { __loongarch_smoke_kernel() }, 0x777);
+    // SAFETY: the assembly wrapper preserves the kernel ABI and verifies every
+    // restored integer register before recovering its own caller's ABI state.
+    assert_eq!(unsafe { __loongarch_smoke_kernel() }, 1);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
     let previous_window: usize;
@@ -160,44 +203,55 @@ pub fn smoke_test() {
     let privileged = user_address(__loongarch_smoke_user_privileged as *const () as usize);
     let floating = user_address(__loongarch_smoke_user_float as *const () as usize);
     let mut context = TrapContext::user(first, stack);
-    for (register, value) in context.regs.iter_mut().enumerate().skip(1) {
+    for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
         if register != 3 {
             *value = 0x1000 + register;
         }
     }
-    let first_regs = context.regs;
-    // Deliberately hostile return privilege/interrupt bits must be sanitized.
-    context.status = usize::MAX;
-    // SAFETY: the controlled payload only traps, uses the temporary low DMW
-    // alias, and never accesses the exclusive context or suspended kernel stack.
-    unsafe { run_user(&mut context) };
-    assert_user(&context, first, 11, &first_regs);
+    let first_regs = *context.registers();
+    // A private-state injection proves public callers cannot retain hostile
+    // return privilege/interrupt bits; no status setter exists in the API.
+    context.prmd = usize::MAX;
+    // SAFETY: the ABI wrapper invokes Rust run_user through a C shim; its
+    // controlled payload only traps and cannot touch the suspended kernel frame.
+    assert_eq!(unsafe { __loongarch_smoke_call_abi(&mut context) }, 1);
+    assert_user(&context, first, ExceptionCause::SystemCall, &first_regs);
 
-    context.pc = second;
-    for (register, value) in context.regs.iter_mut().enumerate().skip(1) {
+    context.set_pc(second);
+    for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
         if register != 3 {
             *value = 0x2000 + register;
         }
     }
     // Change the stack as well, proving r3 is restored rather than retained.
-    context.regs[3] -= 16;
-    let second_regs = context.regs;
-    // SAFETY: this second controlled syscall is mapped by the same DMW and
-    // uses the same exclusively owned state; all restored GPRs are checked.
-    unsafe { run_user(&mut context) };
-    assert_user(&context, second, 11, &second_regs);
+    context.registers_mut()[3] -= 16;
+    let second_regs = *context.registers();
+    // SAFETY: the same ABI probe crosses a second real syscall with modified
+    // PC, GPRs and stack in the exclusively owned, mapped context.
+    assert_eq!(unsafe { __loongarch_smoke_call_abi(&mut context) }, 1);
+    assert_user(&context, second, ExceptionCause::SystemCall, &second_regs);
 
-    context.pc = privileged;
+    context.set_pc(privileged);
     // SAFETY: the mapped probe attempts a CSR read at PLV3, which must trap
     // without changing any integer registers or granting privileged access.
     unsafe { run_user(&mut context) };
-    assert_user(&context, privileged, 14, &second_regs);
+    assert_user(
+        &context,
+        privileged,
+        ExceptionCause::InstructionPrivilege,
+        &second_regs,
+    );
 
-    context.pc = floating;
+    context.set_pc(floating);
     // SAFETY: EUEN.FPE is zero, so this mapped floating instruction must trap
     // before touching extension state; the test does not depend on FP contents.
     unsafe { run_user(&mut context) };
-    assert_user(&context, floating, 15, &second_regs);
+    assert_user(
+        &context,
+        floating,
+        ExceptionCause::FloatingPointDisabled,
+        &second_regs,
+    );
 
     // Remove the entire user alias and invalidate cached translations, making
     // the next fetch miss the TLB. This layer does not walk page tables.
@@ -211,22 +265,19 @@ pub fn smoke_test() {
             options(nostack),
         )
     };
-    context.pc = first;
+    context.set_pc(first);
     // SAFETY: the intentionally unmapped fetch is captured by TLBRENTRY, and
     // the context and suspended kernel stack remain mapped through DMW0.
     unsafe { run_user(&mut context) };
-    assert_ne!(
-        context.cause & REFILL,
-        0,
-        "user refill: cause={:#x}, pc={:#x}, bad_addr={:#x}",
-        context.cause,
-        context.pc,
-        context.bad_addr,
+    assert_eq!(
+        context.cause(),
+        TrapCause::Exception(ExceptionCause::TlbRefill)
     );
-    assert_eq!(context.pc, first);
-    assert_eq!(context.bad_addr, first);
-    assert_eq!(context.status & 0xf, 3);
-    assert_eq!(context.regs, second_regs);
+    assert_ne!(context.raw_cause() & REFILL, 0);
+    assert_eq!(context.pc(), first);
+    assert_eq!(context.bad_addr(), first);
+    assert_eq!(context.raw_status() & 0xf, 3);
+    assert_eq!(context.registers(), &second_regs);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
     // SAFETY: reinstate the same feature-only low user alias to prove normal
@@ -244,7 +295,7 @@ pub fn smoke_test() {
     // SAFETY: the original controlled syscall instruction is mapped again,
     // with the same exclusively owned context and valid user stack.
     unsafe { run_user(&mut context) };
-    assert_user(&context, first, 11, &second_regs);
+    assert_user(&context, first, ExceptionCause::SystemCall, &second_regs);
 
     // SAFETY: all user executions have returned to the high kernel mapping;
     // restoring DMW1 removes the feature-only user mapping before normal boot.

@@ -44,14 +44,18 @@ just test la
 
 验证内容：
 
-- 内核 breakpoint 的整数上下文保存/恢复，以及处理期间的同步嵌套异常。
+- 内核 breakpoint 的整数上下文保存/恢复，以及处理期间的同步嵌套异常。LoongArch handler 修改全部非零、非 SP GPR 后，汇编逐个检查恢复值和原始 SP，再恢复探针调用者，避免探针自身恢复掩盖 trap 恢复错误。
 - 用户态 `ecall` / `syscall` 返回内核，验证所有整数寄存器、异常 PC、原因和先前特权级。
 - 修改用户 PC、整数寄存器和栈指针后重新进入，确认恢复的是修改后的上下文。
+- 独立汇编包装经 C 调用边界执行 Rust `run_user`，在首次进入和修改现场后重入时检查内核调用 ABI。RISC-V 检查 s0–s11、有效的原始 gp/tp 和 SP；LoongArch 检查 fp/s0–s8、原始 tp/r21 和 SP。检查先于包装器自身恢复，返回控制流证明能够回到调用者，不要求 caller-saved 寄存器保持原值。
 - 输入恶意特权状态位仍只能进入 U/PLV3；实际执行特权指令必须异常。
 - 浮点关闭时执行浮点指令必须异常，而不是静默破坏未保存状态。
 - LoongArch 内核嵌套 refill、用户未映射取指及其后的正常 syscall；临时 DMW 修改同步失效缓存翻译。
+- 原因解码覆盖中断/异常编号空间分离、未知编号保留；LoongArch 额外覆盖多位待处理中断、异常子码及 refill 标记优先于旧 ESTAT。解码断言直接接入 `ktest`，不依赖禁用的 Cargo 测试 harness。
 
 debug 模式直接使用 `just test rv debug` 或 `just test la debug`。自检映射只供固定可信探针使用，不提供进程隔离。恢复正常产物使用 `just build`；默认构建不启用自检。
+
+致命诊断应在独立 QEMU 实例中验证，不能加入顺序自检。可在 debug 内核安装 trap 后用 GDB 将 PC 改为零，分别观察 RISC-V instruction access fault 和 LoongArch TLB refill 的 panic 输出及停机路径；默认日志级别下也必须能看到原因、PC、保存状态、原始原因、故障地址和原始 SP。
 
 LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小。构建 trap smoke 后，可用 `readelf -Ws kernel-la` 检查 `__loongarch_run_user`、`__loongarch_smoke_kernel`、`__loongarch_smoke_nested`、`__loongarch_smoke_refill` 的类型及范围；GDB 中 `disassemble __loongarch_run_user` 应止于恢复路径的 `ertn`，不包含后续异常入口前的对齐填充。
 

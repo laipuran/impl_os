@@ -5,7 +5,7 @@
 1. QEMU 加载 ELF，进入 `_start`。
 2. 架构汇编停放非启动 CPU，设置启动栈，跳转 `kernel_main`。
 3. Rust 用 volatile stores 清零 `sbss..ebss`，避免依赖尚未提供的 memset。
-4. 初始化日志和 trap 向量，输出架构；启用 `ktest` 时通过 `ktest::run` 按测试组列表顺序执行自检，目前包括异常及降权往返检查。
+4. 先初始化日志，再安装 trap 向量，随后输出架构；启用 `ktest` 时通过 `ktest::run` 按测试组列表顺序执行自检，目前包括异常及降权往返检查。
 5. 调用架构关机入口；未预期的内核异常输出保存的异常状态并 panic 停机。
 
 链接脚本把 `.bss.stack` 放在 `sbss` 之前，不能在 Rust 已经使用启动栈后将它清零。启动栈固定 64 KiB。
@@ -35,8 +35,10 @@ LoongArch 缺少平台电源管理实现，因此当前启动流程不满足测�
 `arch::trap` 在两个目标上提供相同的整数上下文接口：
 
 - `init()`：启动 CPU 安装异常向量，关闭中断源及浮点/向量扩展，初始化保留的 scratch CSR。
-- `TrapContext::user(entry, stack)`：构造用户态上下文。`regs` 按硬件寄存器编号排列，另保存 `pc`、`status`、`cause`、`bad_addr`；入口和栈的对齐要求见对应 Rust API。
+- `TrapContext::user(entry, stack)`：构造用户态上下文。字段私有，内部保留架构寄存器及 CSR 名称；入口和栈的对齐要求见对应 Rust API。
 - `unsafe run_user(&mut context)`：保存调用者内核 ABI 状态，恢复用户整数寄存器并降权执行；用户异常直接写回该上下文，再返回原内核调用栈。可以检查异常、修改 PC/寄存器，然后再次调用。入口强制用户权限并关闭中断/扩展，不信任传入的特权状态位。
+- `registers()` / `registers_mut()`：按硬件寄存器编号读取或修改整数现场；零号寄存器在硬件恢复时仍为零。`pc()` / `set_pc()` 访问异常 PC，`sp()` 读取被打断时的栈指针。仅 PC/GPR 可通过公共接口修改，特权状态和返回路径标记由架构实现控制。
+- `cause()`：通过架构的 `trap::cause::{TrapCause, InterruptCause, ExceptionCause}` 类型描述原因，不决定恢复策略；未知编号保留。`raw_cause()`、`raw_status()`、`bad_addr()` 提供架构相关的保存值，不能将两架构的状态位视为相同语义。
 
 | 架构 | 用户态返回指令 | 普通异常状态 | 内核/用户栈区分 |
 | --- | --- | --- | --- |
@@ -45,7 +47,9 @@ LoongArch 缺少平台电源管理实现，因此当前启动流程不满足测�
 
 所有整数寄存器在调用 Rust 前保存，用户栈不会用于执行内核处理代码。内核异常在当前栈上分配独立、16 字节对齐的帧，允许保存完成后的同步嵌套异常；处理结束恢复帧并返回内核。共享 `trap::handle_kernel` 默认对所有内核异常 panic；只有 `ktest` 构建中的 trap 自检识别并恢复其自身的探针。
 
-LoongArch 另安装物理 `TLBRENTRY`，处理 refill 时从直接地址模式回到内核 DMW。此类上下文的 `cause` 最高位为 1，其余位保留 ESTAT（其中 Ecode 不是此次 refill 的原因）；PC/故障地址来自 `TLBRERA`/`TLBRBADV`，`status` 统一为 PRMD 位布局。当前只报告 refill，不遍历页表或填充 TLB。
+日志初始化早于 trap 安装，因此不能依赖 trap 诊断日志器初始化期间的异常。安装后的致命内核异常通过 panic 直接输出类型化原因、PC、原始原因/状态、故障地址及原始 SP，不受日志级别过滤；普通断点不会在正式构建中自动跳过。
+
+LoongArch 另安装物理 `TLBRENTRY`，处理 refill 时从直接地址模式回到内核 DMW。此类上下文的 `raw_cause()` 最高位为 1，其余位保留 ESTAT（其中 Ecode 不是此次 refill 的原因）；`cause()` 优先识别该标记。PC/故障地址来自 `TLBRERA`/`TLBRBADV`，`raw_status()` 将 TLBRPRMD.PWE 归一化到 PRMD bit 3，其余返回位采用 PRMD 布局，并非所有 CSR 的逐位原始转储。当前只报告 refill，不遍历页表或填充 TLB。
 
 ### 边界
 

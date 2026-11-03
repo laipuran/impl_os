@@ -5,24 +5,27 @@
 
 use core::arch::{asm, global_asm};
 
+pub mod cause;
+use cause::TrapCause;
+
 /// Integer registers and exception CSRs captured before entering Rust.
 ///
-/// Register indices are architectural numbers (r0..r31); r3 is the stack
-/// pointer and r2 is the thread pointer. `status` contains PRMD, not CRMD.
-/// Kernel handlers may edit registers and PC, but must leave cause unchanged
-/// and retain PLV0 with PIE clear. FP, LSX and LASX are unsupported.
+/// GPR indices are architectural numbers (r0..r31); r3 is the stack pointer
+/// and r2 is the thread pointer. Only GPRs and the exception PC are writable
+/// through the public API. FP, LSX and LASX are unsupported.
 ///
-/// `cause` is raw ESTAT for ordinary traps. Bit 63 additionally marks a TLB
-/// refill (ESTAT.Ecode is stale in that case); PC/bad_addr then come from
-/// TLBRERA/TLBRBADV and status normalizes TLBRPRMD.PWE into PRMD bit 3.
+/// Ordinary traps capture ERA, PRMD, ESTAT and BADV. Refill traps instead
+/// capture TLBRERA/TLBRBADV, normalize TLBRPRMD.PWE into PRMD bit 3, and tag
+/// ESTAT with bit 63 because ESTAT.Ecode is stale. Thus the saved `era`,
+/// `prmd` and `estat` are normalized return state, not always raw CSR values.
 /// Refill faults are reported, not resolved by walking page tables.
 #[repr(C)]
 pub struct TrapContext {
-    pub regs: [usize; 32],
-    pub pc: usize,
-    pub status: usize,
-    pub cause: usize,
-    pub bad_addr: usize,
+    gpr: [usize; 32],
+    era: usize,
+    prmd: usize,
+    estat: usize,
+    badv: usize,
 }
 
 impl TrapContext {
@@ -33,34 +36,91 @@ impl TrapContext {
     /// or validated here, and this mechanism provides no memory isolation.
     #[allow(dead_code)] // Public execution API; boot only uses it in ktest.
     pub fn user(entry: usize, stack: usize) -> Self {
-        let mut regs = [0; 32];
-        regs[3] = stack;
+        let mut gpr = [0; 32];
+        gpr[3] = stack;
         Self {
-            regs,
-            pc: entry,
-            status: 3,
-            cause: 0,
-            bad_addr: 0,
+            gpr,
+            era: entry,
+            prmd: 3,
+            estat: 0,
+            badv: 0,
         }
+    }
+
+    /// Return GPRs indexed by architectural register number.
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn registers(&self) -> &[usize; 32] {
+        &self.gpr
+    }
+
+    /// Edit GPRs; r0 remains hardwired to zero when execution resumes.
+    #[allow(dead_code)] // Public execution API.
+    pub fn registers_mut(&mut self) -> &mut [usize; 32] {
+        &mut self.gpr
+    }
+
+    /// Return ERA, or the normalized TLBRERA PC for a refill.
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn pc(&self) -> usize {
+        self.era
+    }
+
+    /// Set the next exception-return PC without changing privilege state.
+    #[allow(dead_code)] // Public execution API.
+    pub fn set_pc(&mut self, pc: usize) {
+        self.era = pc;
+    }
+
+    /// Return the saved architectural stack pointer (r3).
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn sp(&self) -> usize {
+        self.gpr[3]
+    }
+
+    /// Decode ESTAT, giving the synthetic refill tag priority over Ecode.
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn cause(&self) -> TrapCause {
+        TrapCause::from_estat(self.estat)
+    }
+
+    /// Return ESTAT with bit 63 set for a refill; not an unmodified CSR dump.
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn raw_cause(&self) -> usize {
+        self.estat
+    }
+
+    /// Return PRMD, or normalized TLBRPRMD with PWE moved to PRMD bit 3.
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn raw_status(&self) -> usize {
+        self.prmd
+    }
+
+    /// Return BADV, or TLBRBADV for a refill.
+    #[allow(dead_code)] // Public context inspection API.
+    pub fn bad_addr(&self) -> usize {
+        self.badv
     }
 }
 
-// Every literal GPR slot in entry.S is eight bytes, beginning at offset zero.
-// CSR offsets and total frame size are substituted directly into assembly.
+// Context offsets feed every assembly GPR access; frames and addi.d/ld.d
+// displacements must fit signed 12-bit immediates and keep the ABI alignment.
 const _: () = {
     assert!(core::mem::size_of::<usize>() == 8);
-    assert!(core::mem::offset_of!(TrapContext, regs) == 0);
-    assert!(core::mem::size_of::<[usize; 32]>() == 256);
-    assert!(core::mem::size_of::<TrapContext>() == 288);
+    assert!(core::mem::offset_of!(TrapContext, gpr) % 8 == 0);
+    assert!(core::mem::size_of::<TrapContext>() % 16 == 0);
+    assert!(core::mem::size_of::<TrapContext>() <= 2047);
+    assert!(core::mem::offset_of!(TrapContext, badv) <= 2047);
 };
 
 global_asm!(
     include_str!("entry.S"),
     frame_size = const core::mem::size_of::<TrapContext>(),
-    pc = const core::mem::offset_of!(TrapContext, pc),
-    status = const core::mem::offset_of!(TrapContext, status),
-    cause = const core::mem::offset_of!(TrapContext, cause),
-    bad_addr = const core::mem::offset_of!(TrapContext, bad_addr),
+    gpr = const core::mem::offset_of!(TrapContext, gpr),
+    word = const core::mem::size_of::<usize>(),
+    era = const core::mem::offset_of!(TrapContext, era),
+    prmd = const core::mem::offset_of!(TrapContext, prmd),
+    estat = const core::mem::offset_of!(TrapContext, estat),
+    badv = const core::mem::offset_of!(TrapContext, badv),
 );
 
 extern "C" {
@@ -104,8 +164,8 @@ pub fn init() {
 
 /// Enter PLV3 and return on any user exception with its complete integer state.
 ///
-/// PRMD is overwritten with PPLV=3, PIE=0, PWE=0 even if the caller edited it;
-/// privileged return state therefore cannot leak through a supplied context.
+/// PRMD is overwritten with PPLV=3, PIE=0, PWE=0 even for a context containing
+/// hostile saved state; privileged return state cannot leak into user execution.
 /// The kernel stack, thread pointer and ABI callee-saved registers survive.
 ///
 /// # Safety
@@ -119,7 +179,7 @@ pub fn init() {
 /// trap because EUEN is zero; no extension register state is preserved.
 #[allow(dead_code)] // Public execution API; boot only uses it in ktest.
 pub unsafe fn run_user(context: &mut TrapContext) {
-    context.status = 3;
+    context.prmd = 3;
     // SAFETY: the caller guarantees mapped state and exclusive single-CPU
     // execution; assembly saves the kernel ABI frame before changing privilege.
     unsafe { __loongarch_run_user(context) };

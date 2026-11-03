@@ -1,11 +1,13 @@
 # Rust passes all structure-dependent offsets; x-register slots are XLEN words.
 .equ RV_CTX_SIZE, {context_size}
+.equ RV_GPR, {gpr}
+.equ RV_WORD, {word_size}
 .equ RV_PC, {pc}
 .equ RV_STATUS, {status}
 .equ RV_CAUSE, {cause}
 .equ RV_BAD_ADDR, {bad_addr}
 # ra/gp/tp/s0-s11, context pointer, one temporary slot, then alignment padding.
-.equ RV_SWITCH_SIZE, 144
+.equ RV_SWITCH_SIZE, {switch_size}
 
 .section .text.trap,"ax"
 .option push
@@ -14,36 +16,36 @@
 
 # sp is captured by each entry path. t0 is saved before it becomes a frame base.
 .macro RV_SAVE_GPRS base
-    sd zero, 0(\base)
-    sd ra, 8(\base)
-    sd gp, 24(\base)
-    sd tp, 32(\base)
-    sd t1, 48(\base)
-    sd t2, 56(\base)
-    sd s0, 64(\base)
-    sd s1, 72(\base)
-    sd a0, 80(\base)
-    sd a1, 88(\base)
-    sd a2, 96(\base)
-    sd a3, 104(\base)
-    sd a4, 112(\base)
-    sd a5, 120(\base)
-    sd a6, 128(\base)
-    sd a7, 136(\base)
-    sd s2, 144(\base)
-    sd s3, 152(\base)
-    sd s4, 160(\base)
-    sd s5, 168(\base)
-    sd s6, 176(\base)
-    sd s7, 184(\base)
-    sd s8, 192(\base)
-    sd s9, 200(\base)
-    sd s10, 208(\base)
-    sd s11, 216(\base)
-    sd t3, 224(\base)
-    sd t4, 232(\base)
-    sd t5, 240(\base)
-    sd t6, 248(\base)
+    sd zero, (RV_GPR + RV_WORD * 0)(\base)
+    sd ra, (RV_GPR + RV_WORD * 1)(\base)
+    sd gp, (RV_GPR + RV_WORD * 3)(\base)
+    sd tp, (RV_GPR + RV_WORD * 4)(\base)
+    sd t1, (RV_GPR + RV_WORD * 6)(\base)
+    sd t2, (RV_GPR + RV_WORD * 7)(\base)
+    sd s0, (RV_GPR + RV_WORD * 8)(\base)
+    sd s1, (RV_GPR + RV_WORD * 9)(\base)
+    sd a0, (RV_GPR + RV_WORD * 10)(\base)
+    sd a1, (RV_GPR + RV_WORD * 11)(\base)
+    sd a2, (RV_GPR + RV_WORD * 12)(\base)
+    sd a3, (RV_GPR + RV_WORD * 13)(\base)
+    sd a4, (RV_GPR + RV_WORD * 14)(\base)
+    sd a5, (RV_GPR + RV_WORD * 15)(\base)
+    sd a6, (RV_GPR + RV_WORD * 16)(\base)
+    sd a7, (RV_GPR + RV_WORD * 17)(\base)
+    sd s2, (RV_GPR + RV_WORD * 18)(\base)
+    sd s3, (RV_GPR + RV_WORD * 19)(\base)
+    sd s4, (RV_GPR + RV_WORD * 20)(\base)
+    sd s5, (RV_GPR + RV_WORD * 21)(\base)
+    sd s6, (RV_GPR + RV_WORD * 22)(\base)
+    sd s7, (RV_GPR + RV_WORD * 23)(\base)
+    sd s8, (RV_GPR + RV_WORD * 24)(\base)
+    sd s9, (RV_GPR + RV_WORD * 25)(\base)
+    sd s10, (RV_GPR + RV_WORD * 26)(\base)
+    sd s11, (RV_GPR + RV_WORD * 27)(\base)
+    sd t3, (RV_GPR + RV_WORD * 28)(\base)
+    sd t4, (RV_GPR + RV_WORD * 29)(\base)
+    sd t5, (RV_GPR + RV_WORD * 30)(\base)
+    sd t6, (RV_GPR + RV_WORD * 31)(\base)
 .endm
 
 .macro RV_SAVE_CSRS base, temp
@@ -59,37 +61,37 @@
 
 # t6 remains the frame base until the last load, independent of the restored sp.
 .macro RV_RESTORE_GPRS
-    ld ra, 8(t6)
-    ld sp, 16(t6)
-    ld gp, 24(t6)
-    ld tp, 32(t6)
-    ld t0, 40(t6)
-    ld t1, 48(t6)
-    ld t2, 56(t6)
-    ld s0, 64(t6)
-    ld s1, 72(t6)
-    ld a0, 80(t6)
-    ld a1, 88(t6)
-    ld a2, 96(t6)
-    ld a3, 104(t6)
-    ld a4, 112(t6)
-    ld a5, 120(t6)
-    ld a6, 128(t6)
-    ld a7, 136(t6)
-    ld s2, 144(t6)
-    ld s3, 152(t6)
-    ld s4, 160(t6)
-    ld s5, 168(t6)
-    ld s6, 176(t6)
-    ld s7, 184(t6)
-    ld s8, 192(t6)
-    ld s9, 200(t6)
-    ld s10, 208(t6)
-    ld s11, 216(t6)
-    ld t3, 224(t6)
-    ld t4, 232(t6)
-    ld t5, 240(t6)
-    ld t6, 248(t6)
+    ld ra, (RV_GPR + RV_WORD * 1)(t6)
+    ld sp, (RV_GPR + RV_WORD * 2)(t6)
+    ld gp, (RV_GPR + RV_WORD * 3)(t6)
+    ld tp, (RV_GPR + RV_WORD * 4)(t6)
+    ld t0, (RV_GPR + RV_WORD * 5)(t6)
+    ld t1, (RV_GPR + RV_WORD * 6)(t6)
+    ld t2, (RV_GPR + RV_WORD * 7)(t6)
+    ld s0, (RV_GPR + RV_WORD * 8)(t6)
+    ld s1, (RV_GPR + RV_WORD * 9)(t6)
+    ld a0, (RV_GPR + RV_WORD * 10)(t6)
+    ld a1, (RV_GPR + RV_WORD * 11)(t6)
+    ld a2, (RV_GPR + RV_WORD * 12)(t6)
+    ld a3, (RV_GPR + RV_WORD * 13)(t6)
+    ld a4, (RV_GPR + RV_WORD * 14)(t6)
+    ld a5, (RV_GPR + RV_WORD * 15)(t6)
+    ld a6, (RV_GPR + RV_WORD * 16)(t6)
+    ld a7, (RV_GPR + RV_WORD * 17)(t6)
+    ld s2, (RV_GPR + RV_WORD * 18)(t6)
+    ld s3, (RV_GPR + RV_WORD * 19)(t6)
+    ld s4, (RV_GPR + RV_WORD * 20)(t6)
+    ld s5, (RV_GPR + RV_WORD * 21)(t6)
+    ld s6, (RV_GPR + RV_WORD * 22)(t6)
+    ld s7, (RV_GPR + RV_WORD * 23)(t6)
+    ld s8, (RV_GPR + RV_WORD * 24)(t6)
+    ld s9, (RV_GPR + RV_WORD * 25)(t6)
+    ld s10, (RV_GPR + RV_WORD * 26)(t6)
+    ld s11, (RV_GPR + RV_WORD * 27)(t6)
+    ld t3, (RV_GPR + RV_WORD * 28)(t6)
+    ld t4, (RV_GPR + RV_WORD * 29)(t6)
+    ld t5, (RV_GPR + RV_WORD * 30)(t6)
+    ld t6, (RV_GPR + RV_WORD * 31)(t6)
 .endm
 
 .balign 4
@@ -101,10 +103,10 @@ riscv_trap_entry:
     bnez sp, .Lrv_user_trap
     csrrw sp, sscratch, sp
     addi sp, sp, -RV_CTX_SIZE
-    sd t0, 40(sp)
+    sd t0, (RV_GPR + RV_WORD * 5)(sp)
     RV_SAVE_GPRS sp
     addi t0, sp, RV_CTX_SIZE
-    sd t0, 16(sp)
+    sd t0, (RV_GPR + RV_WORD * 2)(sp)
     RV_SAVE_CSRS sp, t0
     # tp is fixed at zero by boot (there is no kernel TLS). Neither ABI base
     # may be taken from an interrupted user context or smoke-test sentinels.
@@ -130,10 +132,10 @@ riscv_trap_entry:
     ld t0, 120(sp)
     RV_SAVE_GPRS t0
     csrr t1, sscratch
-    sd t1, 16(t0)
+    sd t1, (RV_GPR + RV_WORD * 2)(t0)
     csrw sscratch, zero
     ld t1, 128(sp)
-    sd t1, 40(t0)
+    sd t1, (RV_GPR + RV_WORD * 5)(t0)
     RV_SAVE_CSRS t0, t1
     # All user state is now in the caller's context, without a frame copy.
     ld gp, 8(sp)

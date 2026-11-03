@@ -21,7 +21,12 @@ pub fn handle_kernel(context: &mut TrapContext) {
     }
 
     panic!(
-        "kernel trap: pc={:#x}, status={:#x}, cause={:#x}, bad_addr={:#x}",
-        context.pc, context.status, context.cause, context.bad_addr
+        "kernel trap: {}: pc={:#x}, status={:#x}, raw_cause={:#x}, bad_addr={:#x}, sp={:#x}",
+        context.cause(),
+        context.pc(),
+        context.raw_status(),
+        context.raw_cause(),
+        context.bad_addr(),
+        context.sp(),
     );
 }

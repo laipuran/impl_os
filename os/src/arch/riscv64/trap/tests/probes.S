@@ -130,6 +130,101 @@ riscv_smoke_nested_break:
     ret
 .size riscv_smoke_nested, .-riscv_smoke_nested
 
+.macro RV_ABI_CHECK reg, expected
+    li t0, \expected
+    bne \reg, t0, .Lrv_abi_failed
+.endm
+
+.balign 4
+.globl riscv_smoke_call_user
+.type riscv_smoke_call_user, @function
+riscv_smoke_call_user:
+    addi sp, sp, -128
+    sd ra, 0(sp)
+    sd gp, 8(sp)
+    sd tp, 16(sp)
+    sd s0, 24(sp)
+    sd s1, 32(sp)
+    sd s2, 40(sp)
+    sd s3, 48(sp)
+    sd s4, 56(sp)
+    sd s5, 64(sp)
+    sd s6, 72(sp)
+    sd s7, 80(sp)
+    sd s8, 88(sp)
+    sd s9, 96(sp)
+    sd s10, 104(sp)
+    sd s11, 112(sp)
+    # Single-hart, nonrecursive probe: recover even if the call corrupts sp.
+    # Use only PC-relative addressing, never a potentially corrupted gp/tp.
+    la t0, .Lrv_abi_stack
+    sd sp, 0(t0)
+    li s0, 0x708
+    li s1, 0x709
+    li s2, 0x712
+    li s3, 0x713
+    li s4, 0x714
+    li s5, 0x715
+    li s6, 0x716
+    li s7, 0x717
+    li s8, 0x718
+    li s9, 0x719
+    li s10, 0x71a
+    li s11, 0x71b
+    # gp/tp retain their valid platform values across the Rust ABI shim.
+    call {run_user_shim}
+.Lrv_abi_return:
+    la t0, .Lrv_abi_stack
+    ld t1, 0(t0)
+    bne sp, t1, .Lrv_abi_failed
+    ld t0, 8(t1)
+    bne gp, t0, .Lrv_abi_failed
+    ld t0, 16(t1)
+    bne tp, t0, .Lrv_abi_failed
+    RV_ABI_CHECK s0, 0x708
+    RV_ABI_CHECK s1, 0x709
+    RV_ABI_CHECK s2, 0x712
+    RV_ABI_CHECK s3, 0x713
+    RV_ABI_CHECK s4, 0x714
+    RV_ABI_CHECK s5, 0x715
+    RV_ABI_CHECK s6, 0x716
+    RV_ABI_CHECK s7, 0x717
+    RV_ABI_CHECK s8, 0x718
+    RV_ABI_CHECK s9, 0x719
+    RV_ABI_CHECK s10, 0x71a
+    RV_ABI_CHECK s11, 0x71b
+    li a0, 1
+    j .Lrv_abi_finish
+.Lrv_abi_failed:
+    li a0, 0
+.Lrv_abi_finish:
+    # All observations happen before restoring our caller's saved ABI state.
+    mv sp, t1
+    ld ra, 0(sp)
+    ld gp, 8(sp)
+    ld tp, 16(sp)
+    ld s0, 24(sp)
+    ld s1, 32(sp)
+    ld s2, 40(sp)
+    ld s3, 48(sp)
+    ld s4, 56(sp)
+    ld s5, 64(sp)
+    ld s6, 72(sp)
+    ld s7, 80(sp)
+    ld s8, 88(sp)
+    ld s9, 96(sp)
+    ld s10, 104(sp)
+    ld s11, 112(sp)
+    addi sp, sp, 128
+    ret
+.size riscv_smoke_call_user, .-riscv_smoke_call_user
+
+.pushsection .bss.trap_smoke,"aw",@nobits
+.balign 8
+.Lrv_abi_stack:
+    .zero 8
+.popsection
+
 .balign 4
 .globl riscv_smoke_user_first
 riscv_smoke_user_first:
