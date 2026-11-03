@@ -16,8 +16,12 @@
 .globl __trap_entry
 .type __trap_entry, @function
 __trap_entry:
-    # 硬件既不切换栈，也不保存通用寄存器。此路径仅支持 S 态，
-    # 要求有效且对齐的内核栈；分配 TF_SIZE 字节后仍保持对齐。
+    # 内核执行时 sscratch=0；用户执行时它是可信内核栈顶。
+    # 用户 sp 即使为零也不影响判断：这里判断的是交换后的内核栈顶。
+    csrrw sp, sscratch, sp
+    bnez sp, .Ltrap_stack_ready
+    csrrw sp, sscratch, sp
+.Ltrap_stack_ready:
     addi sp, sp, -TF_SIZE
     SAVE_GPR zero, 0
     SAVE_GPR ra,   1
@@ -50,13 +54,21 @@ __trap_entry:
     SAVE_GPR t4,  29
     SAVE_GPR t5,  30
     SAVE_GPR t6,  31
-    # t0 已保存，现在可用它计算 Trap 发生前的栈指针。
-    addi t0, sp, TF_SIZE
-    SAVE_GPR t0, 2
-    csrr t0, sepc
-    sd t0, TF_SEPC(sp)
+    # 必须根据 SPP 区分来源，不能根据用户 sp 是否为零判断。
     csrr t0, sstatus
     sd t0, TF_SSTATUS(sp)
+    andi t0, t0, 256
+    beqz t0, .Lsave_user_sp
+    addi t0, sp, TF_SIZE
+    j .Lsave_original_sp
+.Lsave_user_sp:
+    csrr t0, sscratch
+.Lsave_original_sp:
+    SAVE_GPR t0, 2
+    # 此后允许 handler 内的可处理同步异常嵌套。
+    csrw sscratch, zero
+    csrr t0, sepc
+    sd t0, TF_SEPC(sp)
     csrr t0, scause
     sd t0, TF_SCAUSE(sp)
     csrr t0, stval
@@ -69,9 +81,6 @@ __trap_entry:
     li tp, 0
     mv a0, sp
     call {handler}
-    # 处理函数不会返回。
-.Ltrap_park:
-    wfi
-    j .Ltrap_park
+    j __trap_return
 .size __trap_entry, .-__trap_entry
 .purgem SAVE_GPR

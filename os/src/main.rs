@@ -13,10 +13,10 @@ fn kernel_main() -> ! {
     // 此 BSS 区间之外。清零之前不访问任何 Rust 全局变量。
     unsafe { clear_bss() };
 
+    utils::logging::init().unwrap();
     #[cfg(target_arch = "riscv64")]
     arch::trap::init();
 
-    utils::logging::init().expect("logger initialization failed");
     log::info!("booted on {}", arch::NAME);
 
     arch::shutdown()
@@ -30,8 +30,7 @@ unsafe fn clear_bss() {
     let mut current = core::ptr::addr_of_mut!(sbss);
     let end = core::ptr::addr_of_mut!(ebss);
     while current < end {
-        // 易失写入可避免将此循环转换为尚不可用的 memset 调用。
-        current.write_volatile(0);
+        current.write(0);
         current = current.add(1);
     }
 }
