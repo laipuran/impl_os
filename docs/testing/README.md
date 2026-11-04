@@ -8,7 +8,7 @@
 | 容器内 `just build` / `make all` | 两架构 ELF 构建与导出 | 启动及运行时语义 |
 | 宿主 `just judge-build` | 原始比赛镜像断网，过滤隐藏文件和目录，以空 Cargo 缓存及独立构建目录构建双架构 ELF | 启动、评分 |
 | 容器内 `just run rv` / `just run la` | 手动观察启动日志和进程退出 | 官方用户程序的正确性 |
-| 容器内 `just test [rv\|la] [release\|debug]` | 构建启用 `ktest` 的 ELF 并执行全部已接入内核自检；目前覆盖 trap | 未实现的测试功能、官方用户程序 |
+| 容器内 `just test [rv\|la] [release\|debug]` | 构建启用 `ktest` 的 ELF 并执行全部已接入内核自检；目前覆盖 trap 和 heap | 未实现的测试功能、官方用户程序 |
 
 当前有统一的启动期内核自检入口，通过静态具名测试组列表组织各模块测试，没有自动注册、名称筛选或官方测试集运行入口。格式和构建检查不能替代运行时功能测试。
 
@@ -16,7 +16,7 @@
 
 ## 当前运行行为
 
-- 共享入口清零 BSS，初始化日志和 trap，输出架构，然后调用 `arch::shutdown()`。
+- 共享入口清零 BSS，初始化日志、trap 和内核堆，输出架构，然后调用 `arch::shutdown()`。
 - RISC-V 使用 SBI System Reset 关机；固件不支持时停放 CPU。
 - LoongArch 输出未实现关机提示并停放 CPU，需要手动退出 QEMU。
 - panic 输出错误并停放 CPU，不走正常关机路径。
@@ -60,6 +60,16 @@ debug 模式直接使用 `just test rv debug` 或 `just test la debug`。自检�
 致命诊断应在独立 QEMU 实例中验证，不能加入顺序自检。可在 debug 内核安装 trap 后用 GDB 将 PC 改为零，分别观察 RISC-V instruction access fault 和 LoongArch TLB refill 的 panic 输出及停机路径；默认日志级别下也必须能看到原因、PC、保存状态、原始原因、故障地址和原始 SP。
 
 LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小。构建 trap 内核测试后，可用 `readelf -Ws kernel-la` 检查 `__loongarch_run_user`、`__loongarch_kernel_test_kernel`、`__loongarch_kernel_test_nested`、`__loongarch_kernel_test_refill` 的类型及范围；GDB 中 `disassemble __loongarch_run_user` 应止于恢复路径的 `ertn`，不包含后续异常入口前的对齐填充。
+
+## Heap 内核测试
+
+在容器内执行 `just test rv` 或 `just test la`，统一入口会在 trap 测试后执行 heap 测试。该测试验证 `Box` 的页对齐、`Vec` 扩容与数据保持、超过堆总容量的 `try_reserve_exact` 返回错误，以及对象销毁和反复申请后全局堆实际占用恢复。
+
+布局和耗尽检查使用单独的、按 8 KiB 对齐的 8 KiB 静态内存池，不耗尽全局堆。测试检查不同大小与对齐的分配互不覆盖、写入数据保持、满堆返回失败、释放后的块复用，以及两个 4 KiB 伙伴块释放后能够满足 8 KiB 申请。全部通过后输出 `<架构>: heap kernel tests passed`，最后仍以统一入口的总成功标记为准。
+
+独立堆耗尽检查不触发全局分配失败处理；实际不可恢复的分配失败会 panic 停机，必须在独立 QEMU 实例中验证，不能加入顺序自检。
+
+## 启用自检时的静态检查
 
 特性分支的静态检查需显式传入功能：
 

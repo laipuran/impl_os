@@ -16,6 +16,12 @@ os/src/
   main.rs
   console.rs
   trap.rs
+  mm/
+    mod.rs
+    heap/
+      mod.rs
+      tests/
+        mod.rs
   ktest/
     mod.rs
   arch/
@@ -48,13 +54,15 @@ os/src/
 
 | 路径 | 当前职责 |
 | --- | --- |
-| `main.rs` | Rust 入口、BSS 清零、日志及 trap 初始化、启动输出 |
+| `main.rs` | Rust 入口、BSS 清零、日志、trap 及内存管理初始化、启动输出 |
 | `console.rs` | 通过 `core::fmt::Write` 格式化文本，逐字节调用架构串口输出 |
 | `arch/mod.rs` | 按编译目标导出平台操作及 `trap` 接口 |
 | `arch/*/entry.S` | CPU 初始设置、停放非启动 CPU、设置 64 KiB 启动栈、进入 Rust |
 | `arch/*/linker.ld` | ELF 入口、代码/数据加载段、启动栈和 BSS 边界 |
 | `arch/*/mod.rs` | 嵌入入口汇编、访问平台 UART、提供停机操作 |
 | `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
+| `mm/mod.rs`、`mm/heap/mod.rs` | 内存管理初始化入口、固定 1 MiB 静态 buddy 堆及全局分配器 |
+| `mm/heap/tests/mod.rs` | 全局堆集合测试，以及独立内存池上的对齐、回收、耗尽和伙伴合并检查 |
 | `ktest/mod.rs` | 仅在 `ktest` 构建中声明具名测试组列表，按顺序执行并在全部完成后输出总成功标记 |
 | `arch/*/trap/mod.rs`、`entry.S`、`return.S` | 私有整数现场、受控访问接口及 CSR 初始化；`entry.S` 保存异常现场并进入处理函数，`return.S` 恢复现场并负责用户态进入与返回；偏移由 Rust 字段布局和寄存器字长提供 |
 | `arch/*/trap/cause.rs` | 架构相关的中断/异常解码，使用 `thiserror` 在枚举变体上声明显示描述，保留未知原因，不决定处理策略 |
@@ -66,10 +74,12 @@ os/src/
 _start → kernel_main → clear_bss
                     → utils::logging::init
                     → trap::init → arch::trap::init
+                    → mm::init → heap::init
                     → console → arch::putchar
-                    → ktest::run → SUITES → arch::trap::tests::kernel_test（仅 ktest）
+                    → ktest::run → SUITES → trap、heap 测试组（仅 ktest）
                     → arch::shutdown
 panic → console → arch::halt
+Box / Vec → 全局 LockedHeap → 静态堆空间
 ```
 
 两架构共用 Rust 入口和格式化输出，各自处理启动地址、CPU 状态、MMIO 地址及停机机制。控制台没有锁，非启动 CPU 被停放，所有 Rust 启动代码由单个 CPU 执行。

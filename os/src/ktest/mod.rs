@@ -6,10 +6,16 @@ struct Suite {
 }
 
 // 将测试套件选择与运行器及正常启动路径分离。
-const SUITES: &[Suite] = &[Suite {
-    name: "trap",
-    run: crate::arch::trap::tests::kernel_test,
-}];
+const SUITES: &[Suite] = &[
+    Suite {
+        name: "trap",
+        run: crate::arch::trap::tests::kernel_test,
+    },
+    Suite {
+        name: "heap",
+        run: crate::mm::heap::tests::kernel_test,
+    },
+];
 
 /// 正常初始化后，按声明顺序运行配置的测试套件。
 ///

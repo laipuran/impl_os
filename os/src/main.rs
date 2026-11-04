@@ -1,12 +1,16 @@
 #![no_std]
 #![no_main]
+#![feature(alloc_error_handler)]
 #![cfg_attr(target_arch = "loongarch64", feature(asm_experimental_arch))]
+
+extern crate alloc;
 
 mod arch;
 mod console;
 #[cfg(feature = "ktest")]
 mod ktest;
 mod lang_items;
+mod mm;
 mod trap;
 mod utils;
 
@@ -17,6 +21,7 @@ fn kernel_main() -> ! {
     unsafe { clear_bss() };
     utils::logging::init().expect("logger initialization failed");
     trap::init();
+    mm::init();
     log::info!("booted on {}", arch::NAME);
     #[cfg(feature = "ktest")]
     ktest::run();
