@@ -31,7 +31,7 @@ RISC-V 正常启动应输出日志后退出 QEMU。LoongArch 的持续运行是�
 
 测试在启动 CPU 上关闭中断、依次执行，每组测试返回前必须恢复临时映射、机器状态并释放测试资源。失败直接走现有 panic 停机，不捕获后继续执行；故意触发致命异常或无法恢复状态的测试应在独立 QEMU 实例中验证，不加入这条顺序执行路径。
 
-## Trap 运行验证
+## Trap 内核测试
 
 在开发容器内运行：
 
@@ -40,7 +40,7 @@ just test
 just test la
 ```
 
-两者分别构建启用 `ktest` 的 RISC-V / LoongArch release ELF，再启动 QEMU。trap 自检完成后输出 `<架构>: trap smoke passed`；只有全部自检完成，统一入口才输出 `<架构>: all kernel tests passed`。断言失败走 panic，不输出总成功标记。LoongArch 成功后仍停放，需 `Ctrl-a`、`x` 退出；自动运行时的超时本身既不是成功也不是失败，必须检查串口的总成功标记。
+两者分别构建启用 `ktest` 的 RISC-V / LoongArch release ELF，再启动 QEMU。trap 内核测试完成后输出 `<架构>: trap kernel tests passed`；只有全部测试完成，统一入口才输出 `<架构>: all kernel tests passed`。断言失败走 panic，不输出总成功标记。LoongArch 成功后仍停放，需 `Ctrl-a`、`x` 退出；自动运行时的超时本身既不是成功也不是失败，必须检查串口的总成功标记。
 
 验证内容：
 
@@ -57,7 +57,7 @@ debug 模式直接使用 `just test rv debug` 或 `just test la debug`。自检�
 
 致命诊断应在独立 QEMU 实例中验证，不能加入顺序自检。可在 debug 内核安装 trap 后用 GDB 将 PC 改为零，分别观察 RISC-V instruction access fault 和 LoongArch TLB refill 的 panic 输出及停机路径；默认日志级别下也必须能看到原因、PC、保存状态、原始原因、故障地址和原始 SP。
 
-LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小。构建 trap smoke 后，可用 `readelf -Ws kernel-la` 检查 `__loongarch_run_user`、`__loongarch_smoke_kernel`、`__loongarch_smoke_nested`、`__loongarch_smoke_refill` 的类型及范围；GDB 中 `disassemble __loongarch_run_user` 应止于恢复路径的 `ertn`，不包含后续异常入口前的对齐填充。
+LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小。构建 trap 内核测试后，可用 `readelf -Ws kernel-la` 检查 `__loongarch_run_user`、`__loongarch_kernel_test_kernel`、`__loongarch_kernel_test_nested`、`__loongarch_kernel_test_refill` 的类型及范围；GDB 中 `disassemble __loongarch_run_user` 应止于恢复路径的 `ertn`，不包含后续异常入口前的对齐填充。
 
 特性分支的静态检查需显式传入功能：
 

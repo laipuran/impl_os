@@ -1,19 +1,21 @@
-//! Decode the independent interrupt and exception code spaces of RV64 `scause`.
+//! 解码 RV64 `scause` 中相互独立的中断码与异常码。
 
-use core::fmt;
+use thiserror::Error;
 
-/// A supervisor trap, classified by the high interrupt bit of `scause`.
+/// 根据 `scause` 最高位的中断标志对监管态陷阱分类。
 ///
-/// Unknown codes retain every non-interrupt bit for diagnostics. Classification
-/// does not imply that the trap is recoverable or choose a return-PC policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 未知原因码保留中断标志以外的全部位，便于诊断。
+/// 此分类不表示陷阱可以恢复，也不决定返回地址的调整策略。
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum TrapCause {
+    #[error("interrupt: {0}")]
     Interrupt(InterruptCause),
+    #[error("exception: {0}")]
     Exception(ExceptionCause),
 }
 
 impl TrapCause {
-    /// Decode raw `scause`, removing only its architectural interrupt bit.
+    /// 解码原始 `scause`，仅移除架构定义的中断标志位。
     pub fn from_scause(scause: usize) -> Self {
         let interrupt_bit = 1usize << (usize::BITS - 1);
         let code = scause & !interrupt_bit;
@@ -25,21 +27,16 @@ impl TrapCause {
     }
 }
 
-impl fmt::Display for TrapCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Interrupt(cause) => write!(f, "interrupt: {cause}"),
-            Self::Exception(cause) => write!(f, "exception: {cause}"),
-        }
-    }
-}
-
-/// Supervisor interrupt codes; unrecognized codes are retained without loss.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 监管态中断码；无法识别的原因码会完整保留。
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum InterruptCause {
+    #[error("supervisor software interrupt")]
     SupervisorSoftware,
+    #[error("supervisor timer interrupt")]
     SupervisorTimer,
+    #[error("supervisor external interrupt")]
     SupervisorExternal,
+    #[error("unknown interrupt code {0}")]
     Unknown(usize),
 }
 
@@ -54,35 +51,38 @@ impl From<usize> for InterruptCause {
     }
 }
 
-impl fmt::Display for InterruptCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SupervisorSoftware => f.write_str("supervisor software interrupt"),
-            Self::SupervisorTimer => f.write_str("supervisor timer interrupt"),
-            Self::SupervisorExternal => f.write_str("supervisor external interrupt"),
-            Self::Unknown(code) => write!(f, "unknown interrupt code {code}"),
-        }
-    }
-}
-
-/// Synchronous exception codes, distinct from the interrupt numbering space.
+/// 同步异常码，与中断码使用不同的编号空间。
 ///
-/// Reserved and extension-specific codes not named here remain `Unknown`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 未在此列出的保留码和扩展专用码统一保留为 `Unknown`。
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ExceptionCause {
+    #[error("instruction address misaligned")]
     InstructionAddressMisaligned,
+    #[error("instruction access fault")]
     InstructionAccessFault,
+    #[error("illegal instruction")]
     IllegalInstruction,
+    #[error("breakpoint")]
     Breakpoint,
+    #[error("load address misaligned")]
     LoadAddressMisaligned,
+    #[error("load access fault")]
     LoadAccessFault,
+    #[error("store/AMO address misaligned")]
     StoreAmoAddressMisaligned,
+    #[error("store/AMO access fault")]
     StoreAmoAccessFault,
+    #[error("environment call from U-mode")]
     UserEnvironmentCall,
+    #[error("environment call from S-mode")]
     SupervisorEnvironmentCall,
+    #[error("instruction page fault")]
     InstructionPageFault,
+    #[error("load page fault")]
     LoadPageFault,
+    #[error("store/AMO page fault")]
     StoreAmoPageFault,
+    #[error("unknown exception code {0}")]
     Unknown(usize),
 }
 
@@ -103,27 +103,6 @@ impl From<usize> for ExceptionCause {
             13 => Self::LoadPageFault,
             15 => Self::StoreAmoPageFault,
             _ => Self::Unknown(code),
-        }
-    }
-}
-
-impl fmt::Display for ExceptionCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InstructionAddressMisaligned => f.write_str("instruction address misaligned"),
-            Self::InstructionAccessFault => f.write_str("instruction access fault"),
-            Self::IllegalInstruction => f.write_str("illegal instruction"),
-            Self::Breakpoint => f.write_str("breakpoint"),
-            Self::LoadAddressMisaligned => f.write_str("load address misaligned"),
-            Self::LoadAccessFault => f.write_str("load access fault"),
-            Self::StoreAmoAddressMisaligned => f.write_str("store/AMO address misaligned"),
-            Self::StoreAmoAccessFault => f.write_str("store/AMO access fault"),
-            Self::UserEnvironmentCall => f.write_str("environment call from U-mode"),
-            Self::SupervisorEnvironmentCall => f.write_str("environment call from S-mode"),
-            Self::InstructionPageFault => f.write_str("instruction page fault"),
-            Self::LoadPageFault => f.write_str("load page fault"),
-            Self::StoreAmoPageFault => f.write_str("store/AMO page fault"),
-            Self::Unknown(code) => write!(f, "unknown exception code {code}"),
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Feature-only real PLV0/PLV3 execution probes; never linked into normal boot.
+//! 仅由 feature 启用的真实 PLV0/PLV3 执行探针；不链接到正常启动路径。
 
 use super::cause::{ExceptionCause, InterruptCause, TrapCause};
 use super::{run_user, TrapContext};
@@ -7,25 +7,25 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 global_asm!(include_str!("probes.S"), run_user = sym abi_run_user);
 
-/// Give the assembly ABI probe an explicit C call boundary around Rust's API.
+/// 为汇编 ABI 探针提供包裹 Rust API 的显式 C 调用边界。
 unsafe extern "C" fn abi_run_user(context: *mut TrapContext) {
-    // SAFETY: the feature-only wrapper forwards its exclusively owned context;
-    // smoke_test supplies the mapped payload and keeps the kernel frame valid.
+    // SAFETY: 仅由 feature 启用的 wrapper 转发其独占 context；
+    // kernel_test 提供已映射的测试代码，并保持内核 frame 有效。
     unsafe { run_user(&mut *context) };
 }
 
 extern "C" {
-    fn __loongarch_smoke_kernel() -> usize;
-    fn __loongarch_smoke_call_abi(context: *mut TrapContext) -> usize;
-    fn __loongarch_smoke_kernel_break();
-    fn __loongarch_smoke_nested();
-    fn __loongarch_smoke_nested_break();
-    fn __loongarch_smoke_refill(address: usize);
-    fn __loongarch_smoke_refill_load();
-    fn __loongarch_smoke_user_first();
-    fn __loongarch_smoke_user_second();
-    fn __loongarch_smoke_user_privileged();
-    fn __loongarch_smoke_user_float();
+    fn __loongarch_kernel_test_kernel() -> usize;
+    fn __loongarch_kernel_test_call_abi(context: *mut TrapContext) -> usize;
+    fn __loongarch_kernel_test_kernel_break();
+    fn __loongarch_kernel_test_nested();
+    fn __loongarch_kernel_test_nested_break();
+    fn __loongarch_kernel_test_refill(address: usize);
+    fn __loongarch_kernel_test_refill_load();
+    fn __loongarch_kernel_test_user_first();
+    fn __loongarch_kernel_test_user_second();
+    fn __loongarch_kernel_test_user_privileged();
+    fn __loongarch_kernel_test_user_float();
 }
 
 #[repr(C, align(16))]
@@ -40,7 +40,7 @@ const UNMAPPED: usize = 0x4000_0000;
 
 fn kernel_tp() -> usize {
     let tp;
-    // SAFETY: reading the current integer thread pointer has no side effects.
+    // SAFETY: 读取当前整数 thread pointer 不产生副作用。
     unsafe { asm!("move {tp}, $tp", tp = out(reg) tp, options(nomem, nostack)) };
     tp
 }
@@ -73,11 +73,11 @@ fn decode_test() {
     );
 }
 
-/// Recognize only the exact feature-only breakpoints and kernel refill probe.
-/// All other exceptions are left for the shared fatal kernel-trap handler.
-pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
+/// 仅识别该 feature 专用的精确 breakpoint 及内核 refill 探针。
+/// 其他异常交由共用的内核致命 trap handler 处理。
+pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     if context.cause() == TrapCause::Exception(ExceptionCause::TlbRefill) {
-        if context.pc() != __loongarch_smoke_refill_load as *const () as usize {
+        if context.pc() != __loongarch_kernel_test_refill_load as *const () as usize {
             return false;
         }
         assert_eq!(context.raw_status() & 7, 0);
@@ -92,8 +92,8 @@ pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
     if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
         return false;
     }
-    let outer_pc = __loongarch_smoke_kernel_break as *const () as usize;
-    let nested_pc = __loongarch_smoke_nested_break as *const () as usize;
+    let outer_pc = __loongarch_kernel_test_kernel_break as *const () as usize;
+    let nested_pc = __loongarch_kernel_test_nested_break as *const () as usize;
     if context.pc() == nested_pc {
         assert_eq!(context.raw_status() & 7, 0);
         assert_ne!(OUTER_SP.load(Ordering::Relaxed), 0);
@@ -118,16 +118,16 @@ pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
     }
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
     OUTER_SP.store(context.sp(), Ordering::Relaxed);
-    // SAFETY: this exact PLV0 breakpoint is recognized above, uses the current
-    // valid kernel stack, and returns after its saved ERA is advanced.
-    unsafe { __loongarch_smoke_nested() };
+    // SAFETY: 上方会识别此精确 PLV0 breakpoint；它使用当前有效内核栈，
+    // 并在保存的 ERA 前移后返回。
+    unsafe { __loongarch_kernel_test_nested() };
     assert_eq!(NESTED_COUNT.load(Ordering::Relaxed), 1);
-    // SAFETY: no PLV0 low DMW or TLB mapping exists for this address. The
-    // exact refill probe is recognized above and skipped without reading it.
-    unsafe { __loongarch_smoke_refill(UNMAPPED) };
+    // SAFETY: 此地址不存在 PLV0 低地址 DMW 或 TLB 映射。
+    // 上方会识别精确 refill 探针并跳过，不读取该地址。
+    unsafe { __loongarch_kernel_test_refill(UNMAPPED) };
     assert_eq!(REFILL_COUNT.load(Ordering::Relaxed), 1);
     OUTER_SP.store(0, Ordering::Relaxed);
-    // Nested traps overwrite live exception CSRs, not the outer saved frame.
+    // 嵌套 trap 会覆盖当前异常 CSR，但不覆盖外层保存的 frame。
     assert_eq!(context.pc(), outer_pc);
     assert_eq!(context.raw_status() & 7, 0);
     assert_eq!(
@@ -135,8 +135,8 @@ pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
         TrapCause::Exception(ExceptionCause::Breakpoint)
     );
     assert_eq!(context.registers()[2], 0x602);
-    // The assembly probe checks every edited GPR before restoring its caller.
-    // Keep only sp unchanged so the interrupted kernel frame remains valid.
+    // 汇编探针在恢复调用者前检查每个修改后的 GPR。
+    // 仅保持 sp 不变，以保证被中断的内核 frame 有效。
     for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
         if register != 3 {
             *value = 0x700 + register;
@@ -159,28 +159,28 @@ fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 }
 
-/// Exercise nested kernel break/refill traps and six user exception round trips.
+/// 测试嵌套内核 break/refill trap 及六次用户异常往返。
 ///
-/// A temporary low DMW1 alias permits PLV3 to access physical RAM. It maps all
-/// RAM without isolation and exists ONLY for this controlled smoke payload;
-/// the original DMW1 is restored before this function reports success.
-pub fn smoke_test() {
+/// 临时低地址 DMW1 别名允许 PLV3 访问物理 RAM。它映射所有 RAM，
+/// 不提供隔离，仅用于此受控内核测试代码；
+/// 函数报告成功前会恢复原始 DMW1。
+pub fn kernel_test() {
     decode_test();
     KERNEL_TP.store(kernel_tp(), Ordering::Relaxed);
     NESTED_COUNT.store(0, Ordering::Relaxed);
     REFILL_COUNT.store(0, Ordering::Relaxed);
-    // SAFETY: this early boot smoke runs exclusively through DMW0 before
-    // any page tables exist; discarding reset-time TLB contents is harmless
-    // and makes both intentional refill probes deterministic.
+    // SAFETY: 此早期启动内核测试在页表建立前仅通过 DMW0 运行；
+    // 丢弃复位时的 TLB 内容无害，
+    // 并使两个预期的 refill 探针行为确定。
     unsafe { asm!("invtlb 0x0, $zero, $zero", options(nostack)) };
-    // SAFETY: the assembly wrapper preserves the kernel ABI and verifies every
-    // restored integer register before recovering its own caller's ABI state.
-    assert_eq!(unsafe { __loongarch_smoke_kernel() }, 1);
+    // SAFETY: 汇编 wrapper 保留内核 ABI，并在恢复调用者 ABI 状态前
+    // 检查每个恢复的整数寄存器。
+    assert_eq!(unsafe { __loongarch_kernel_test_kernel() }, 1);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
     let previous_window: usize;
-    // SAFETY: single-CPU feature-only boot owns DMW1. MAT=CC, PLV3 enabled,
-    // VSEG=0; high PLV0-only DMW0 is unchanged. This is NOT memory isolation.
+    // SAFETY: 单 CPU 的 feature 专用启动路径独占 DMW1。MAT=CC，启用 PLV3，
+    // VSEG=0；高地址、仅 PLV0 可用的 DMW0 保持不变。这不提供内存隔离。
     unsafe {
         asm!(
             "csrrd {saved}, 0x181",
@@ -195,13 +195,13 @@ pub fn smoke_test() {
         );
     }
 
-    // SAFETY: forming a raw pointer to the single-CPU smoke stack creates
-    // no reference or alias; only the controlled user context uses this RAM.
+    // SAFETY: 构造单 CPU 内核测试栈的 raw pointer 不创建引用或别名；
+    // 仅受控用户 context 使用此 RAM。
     let stack = user_address(unsafe { core::ptr::addr_of_mut!(USER_STACK.0) } as usize + 4096);
-    let first = user_address(__loongarch_smoke_user_first as *const () as usize);
-    let second = user_address(__loongarch_smoke_user_second as *const () as usize);
-    let privileged = user_address(__loongarch_smoke_user_privileged as *const () as usize);
-    let floating = user_address(__loongarch_smoke_user_float as *const () as usize);
+    let first = user_address(__loongarch_kernel_test_user_first as *const () as usize);
+    let second = user_address(__loongarch_kernel_test_user_second as *const () as usize);
+    let privileged = user_address(__loongarch_kernel_test_user_privileged as *const () as usize);
+    let floating = user_address(__loongarch_kernel_test_user_float as *const () as usize);
     let mut context = TrapContext::user(first, stack);
     for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
         if register != 3 {
@@ -209,12 +209,12 @@ pub fn smoke_test() {
         }
     }
     let first_regs = *context.registers();
-    // A private-state injection proves public callers cannot retain hostile
-    // return privilege/interrupt bits; no status setter exists in the API.
+    // 注入私有状态，验证公共调用者无法保留恶意返回特权位或中断位；
+    // API 不提供 status setter。
     context.prmd = usize::MAX;
-    // SAFETY: the ABI wrapper invokes Rust run_user through a C shim; its
-    // controlled payload only traps and cannot touch the suspended kernel frame.
-    assert_eq!(unsafe { __loongarch_smoke_call_abi(&mut context) }, 1);
+    // SAFETY: ABI wrapper 通过 C shim 调用 Rust run_user；
+    // 其受控代码仅触发 trap，无法访问暂停的内核 frame。
+    assert_eq!(unsafe { __loongarch_kernel_test_call_abi(&mut context) }, 1);
     assert_user(&context, first, ExceptionCause::SystemCall, &first_regs);
 
     context.set_pc(second);
@@ -223,17 +223,17 @@ pub fn smoke_test() {
             *value = 0x2000 + register;
         }
     }
-    // Change the stack as well, proving r3 is restored rather than retained.
+    // 同时修改栈，验证 r3 被恢复而非沿用。
     context.registers_mut()[3] -= 16;
     let second_regs = *context.registers();
-    // SAFETY: the same ABI probe crosses a second real syscall with modified
-    // PC, GPRs and stack in the exclusively owned, mapped context.
-    assert_eq!(unsafe { __loongarch_smoke_call_abi(&mut context) }, 1);
+    // SAFETY: 同一 ABI 探针使用独占、已映射 context 中修改后的 PC、
+    // GPR 和栈，再次执行真实 syscall。
+    assert_eq!(unsafe { __loongarch_kernel_test_call_abi(&mut context) }, 1);
     assert_user(&context, second, ExceptionCause::SystemCall, &second_regs);
 
     context.set_pc(privileged);
-    // SAFETY: the mapped probe attempts a CSR read at PLV3, which must trap
-    // without changing any integer registers or granting privileged access.
+    // SAFETY: 已映射探针尝试在 PLV3 读取 CSR，必须触发 trap，
+    // 不得改变任何整数寄存器或获得特权访问。
     unsafe { run_user(&mut context) };
     assert_user(
         &context,
@@ -243,8 +243,8 @@ pub fn smoke_test() {
     );
 
     context.set_pc(floating);
-    // SAFETY: EUEN.FPE is zero, so this mapped floating instruction must trap
-    // before touching extension state; the test does not depend on FP contents.
+    // SAFETY: EUEN.FPE 为零，因此已映射浮点指令必须在访问扩展状态前
+    // 触发 trap；测试不依赖 FP 内容。
     unsafe { run_user(&mut context) };
     assert_user(
         &context,
@@ -253,10 +253,10 @@ pub fn smoke_test() {
         &second_regs,
     );
 
-    // Remove the entire user alias and invalidate cached translations, making
-    // the next fetch miss the TLB. This layer does not walk page tables.
-    // SAFETY: only the feature-only user window changes; kernel DMW0 stays
-    // mapped and the controlled user context cannot execute any instruction.
+    // 移除整个用户别名并使缓存的地址转换失效，令下一次取指发生 TLB miss。
+    // 此层不遍历页表。
+    // SAFETY: 仅修改 feature 专用用户窗口；内核 DMW0 保持映射，
+    // 受控用户 context 无法执行任何指令。
     unsafe {
         asm!(
             "csrwr $zero, 0x181",
@@ -266,8 +266,8 @@ pub fn smoke_test() {
         )
     };
     context.set_pc(first);
-    // SAFETY: the intentionally unmapped fetch is captured by TLBRENTRY, and
-    // the context and suspended kernel stack remain mapped through DMW0.
+    // SAFETY: 故意不映射的取指由 TLBRENTRY 捕获，
+    // context 和暂停的内核栈仍通过 DMW0 保持映射。
     unsafe { run_user(&mut context) };
     assert_eq!(
         context.cause(),
@@ -280,8 +280,8 @@ pub fn smoke_test() {
     assert_eq!(context.registers(), &second_regs);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
-    // SAFETY: reinstate the same feature-only low user alias to prove normal
-    // exception delivery still works after the special refill return path.
+    // SAFETY: 恢复相同的 feature 专用低地址用户别名，验证特殊 refill
+    // 返回路径之后正常异常处理仍然有效。
     unsafe {
         asm!(
             "li.w {tmp}, 0x18",
@@ -292,13 +292,13 @@ pub fn smoke_test() {
             options(nostack),
         );
     }
-    // SAFETY: the original controlled syscall instruction is mapped again,
-    // with the same exclusively owned context and valid user stack.
+    // SAFETY: 原始受控 syscall 指令再次被映射，
+    // 仍使用同一独占 context 及有效用户栈。
     unsafe { run_user(&mut context) };
     assert_user(&context, first, ExceptionCause::SystemCall, &second_regs);
 
-    // SAFETY: all user executions have returned to the high kernel mapping;
-    // restoring DMW1 removes the feature-only user mapping before normal boot.
+    // SAFETY: 所有用户执行均已返回高地址内核映射；
+    // 恢复 DMW1，在正常启动前移除 feature 专用用户映射。
     unsafe {
         asm!(
             "dbar 0",
@@ -309,5 +309,5 @@ pub fn smoke_test() {
             options(nostack),
         );
     }
-    crate::println!("loongarch64: trap smoke passed");
+    crate::println!("loongarch64: trap kernel tests passed");
 }

@@ -27,6 +27,7 @@ os/src/
         mod.rs
         cause.rs
         entry.S
+        return.S
         tests/
           mod.rs
           probes.S
@@ -38,6 +39,7 @@ os/src/
         mod.rs
         cause.rs
         entry.S
+        return.S
         tests/
           mod.rs
           probes.S
@@ -54,8 +56,8 @@ os/src/
 | `arch/*/mod.rs` | 嵌入入口汇编、访问平台 UART、提供停机操作 |
 | `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
 | `ktest/mod.rs` | 仅在 `ktest` 构建中声明具名测试组列表，按顺序执行并在全部完成后输出总成功标记 |
-| `arch/*/trap/mod.rs`、`entry.S` | 私有整数现场、受控访问接口及 CSR 初始化；汇编按 Rust 字段偏移、字长和架构寄存器编号保存/恢复现场并切换特权级 |
-| `arch/*/trap/cause.rs` | 架构相关的中断/异常解码及显示，保留未知原因，不决定处理策略 |
+| `arch/*/trap/mod.rs`、`entry.S`、`return.S` | 私有整数现场、受控访问接口及 CSR 初始化；`entry.S` 保存异常现场并进入处理函数，`return.S` 恢复现场并负责用户态进入与返回；偏移由 Rust 字段布局和寄存器字长提供 |
+| `arch/*/trap/cause.rs` | 架构相关的中断/异常解码，使用 `thiserror` 在枚举变体上声明显示描述，保留未知原因，不决定处理策略 |
 | `arch/*/trap/tests/mod.rs`、`probes.S` | `ktest` 功能控制的实际异常和特权级往返自检，与正式实现分目录存放 |
 
 ## 执行关系
@@ -65,7 +67,7 @@ _start → kernel_main → clear_bss
                     → utils::logging::init
                     → trap::init → arch::trap::init
                     → console → arch::putchar
-                    → ktest::run → SUITES → arch::trap::tests::smoke_test（仅 ktest）
+                    → ktest::run → SUITES → arch::trap::tests::kernel_test（仅 ktest）
                     → arch::shutdown
 panic → console → arch::halt
 ```

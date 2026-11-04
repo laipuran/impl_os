@@ -20,7 +20,7 @@ _start:
     csrrd $t0, 0x20
     bnez $t0, .Lpark
     la.local $sp, boot_stack_top
-    # No TLS is installed; trap initialization retains this kernel ABI tp.
+    # 未安装 TLS；异常初始化保留此内核 ABI 的 tp。
     move $tp, $zero
     b kernel_main
 .Lpark:

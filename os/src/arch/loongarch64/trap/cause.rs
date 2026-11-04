@@ -1,18 +1,20 @@
-//! ESTAT decoding, including the software tag used by the refill entry.
+//! 解码 ESTAT，包括重填入口使用的软件标记。
 
-use core::fmt;
+use thiserror::Error;
 
-/// An interrupt bitmap or synchronous exception captured by the trap entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 陷阱入口保存的中断位图或同步异常。
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum TrapCause {
-    /// Ecode is zero; ESTAT.IS describes the pending interrupt sources.
+    /// Ecode 为零；ESTAT.IS 表示当前待处理的中断源。
+    #[error("interrupt: {0}")]
     Interrupt(InterruptCause),
-    /// A synchronous exception, including a tagged TLB refill.
+    /// 同步异常，包括带软件标记的 TLB 重填。
+    #[error("exception: {0}")]
     Exception(ExceptionCause),
 }
 
 impl TrapCause {
-    /// Decode saved ESTAT, giving the bit-63 refill tag priority over stale Ecode.
+    /// 解码保存的 ESTAT，第 63 位的重填标记优先于残留的 Ecode。
     pub(super) fn from_estat(estat: usize) -> Self {
         if estat & (1usize << 63) != 0 {
             return Self::Exception(ExceptionCause::TlbRefill);
@@ -27,29 +29,26 @@ impl TrapCause {
     }
 }
 
-impl fmt::Display for TrapCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Interrupt(cause) => write!(f, "interrupt: {cause}"),
-            Self::Exception(cause) => write!(f, "exception: {cause}"),
-        }
-    }
-}
-
-/// ESTAT.IS is a bitmap, not an interrupt number; simultaneous bits are retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// ESTAT.IS 是位图而非中断编号；同时置位的所有中断都会保留。
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum InterruptCause {
-    /// Software interrupt 0 or 1.
+    /// 软件中断 0 或 1。
+    #[error("software interrupt {0}")]
     Software(usize),
-    /// Hardware interrupt 0 through 7 (IS bits 2 through 9).
+    /// 硬件中断 0 至 7，对应 IS 的第 2 至 9 位。
+    #[error("hardware interrupt {0}")]
     Hardware(usize),
-    /// Performance-monitor counter interrupt (IS bit 10).
+    /// 性能监控计数器中断，对应 IS 的第 10 位。
+    #[error("performance counter interrupt")]
     PerformanceCounter,
-    /// Timer interrupt (IS bit 11).
+    /// 定时器中断，对应 IS 的第 11 位。
+    #[error("timer interrupt")]
     Timer,
-    /// Interprocessor interrupt (IS bit 12).
+    /// 处理器间中断，对应 IS 的第 12 位。
+    #[error("interprocessor interrupt")]
     Interprocessor,
-    /// Zero, multiple, or unrecognized pending bits, preserved without priority.
+    /// 待处理位为零、有多个置位或无法识别时，完整保留且不设优先级。
+    #[error("pending interrupt mask {0:#05x}")]
     Pending(usize),
 }
 
@@ -69,63 +68,71 @@ impl From<usize> for InterruptCause {
     }
 }
 
-impl fmt::Display for InterruptCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Software(index) => write!(f, "software interrupt {index}"),
-            Self::Hardware(index) => write!(f, "hardware interrupt {index}"),
-            Self::PerformanceCounter => f.write_str("performance counter interrupt"),
-            Self::Timer => f.write_str("timer interrupt"),
-            Self::Interprocessor => f.write_str("interprocessor interrupt"),
-            Self::Pending(mask) => write!(f, "pending interrupt mask {mask:#05x}"),
-        }
-    }
-}
-
-/// ESTAT.Ecode/EsubCode, preserving unknown combinations rather than guessing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// ESTAT.Ecode/EsubCode；保留未知组合，不推测其含义。
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ExceptionCause {
-    /// Invalid page on a load.
+    /// 读取时页无效。
+    #[error("page invalid on load")]
     PageInvalidLoad,
-    /// Invalid page on a store.
+    /// 写入时页无效。
+    #[error("page invalid on store")]
     PageInvalidStore,
-    /// Invalid page on instruction fetch.
+    /// 取指时页无效。
+    #[error("page invalid on instruction fetch")]
     PageInvalidFetch,
-    /// Page modification fault.
+    /// 页修改异常。
+    #[error("page modification fault")]
     PageModification,
-    /// Page is not readable.
+    /// 页不可读。
+    #[error("page not readable")]
     PageNotReadable,
-    /// Page is not executable.
+    /// 页不可执行。
+    #[error("page not executable")]
     PageNotExecutable,
-    /// Page privilege fault.
+    /// 页特权等级异常。
+    #[error("page privilege fault")]
     PagePrivilege,
-    /// Instruction address error (Ecode 8, EsubCode 0).
+    /// 指令地址错误，Ecode 为 8，EsubCode 为 0。
+    #[error("instruction address error")]
     InstructionAddressError,
-    /// Data address error (Ecode 8, EsubCode 1).
+    /// 数据地址错误，Ecode 为 8，EsubCode 为 1。
+    #[error("data address error")]
     DataAddressError,
-    /// Address alignment error.
+    /// 地址对齐错误。
+    #[error("address alignment error")]
     AddressMisaligned,
-    /// Bound-check error.
+    /// 边界检查错误。
+    #[error("bound check error")]
     BoundCheck,
-    /// Explicit system call.
+    /// 显式系统调用。
+    #[error("system call")]
     SystemCall,
-    /// Explicit breakpoint.
+    /// 显式断点。
+    #[error("breakpoint")]
     Breakpoint,
-    /// Illegal instruction.
+    /// 非法指令。
+    #[error("illegal instruction")]
     IllegalInstruction,
-    /// Instruction privilege error.
+    /// 指令特权等级错误。
+    #[error("instruction privilege error")]
     InstructionPrivilege,
-    /// Floating-point execution is disabled.
+    /// 浮点执行未启用。
+    #[error("floating point disabled")]
     FloatingPointDisabled,
-    /// LSX execution is disabled.
+    /// LSX 执行未启用。
+    #[error("LSX disabled")]
     LsxDisabled,
-    /// LASX execution is disabled.
+    /// LASX 执行未启用。
+    #[error("LASX disabled")]
     LasxDisabled,
-    /// Floating-point exception.
+    /// 浮点异常。
+    #[error("floating point exception")]
     FloatingPoint,
-    /// Dedicated refill entry; ESTAT.Ecode is stale and must not be decoded.
+    /// 专用重填入口；此时 ESTAT.Ecode 是残留值，不应解码。
+    #[error("TLB refill")]
     TlbRefill,
-    /// Unrecognized Ecode/EsubCode pair, with both fields retained.
+    /// 无法识别的 Ecode/EsubCode 组合，两个字段均完整保留。
+    #[error("unknown exception code {code}, subcode {subcode}")]
     Unknown { code: usize, subcode: usize },
 }
 
@@ -153,36 +160,5 @@ impl ExceptionCause {
             (18, 0) => Self::FloatingPoint,
             _ => Self::Unknown { code, subcode },
         }
-    }
-}
-
-impl fmt::Display for ExceptionCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let description = match self {
-            Self::PageInvalidLoad => "page invalid on load",
-            Self::PageInvalidStore => "page invalid on store",
-            Self::PageInvalidFetch => "page invalid on instruction fetch",
-            Self::PageModification => "page modification fault",
-            Self::PageNotReadable => "page not readable",
-            Self::PageNotExecutable => "page not executable",
-            Self::PagePrivilege => "page privilege fault",
-            Self::InstructionAddressError => "instruction address error",
-            Self::DataAddressError => "data address error",
-            Self::AddressMisaligned => "address alignment error",
-            Self::BoundCheck => "bound check error",
-            Self::SystemCall => "system call",
-            Self::Breakpoint => "breakpoint",
-            Self::IllegalInstruction => "illegal instruction",
-            Self::InstructionPrivilege => "instruction privilege error",
-            Self::FloatingPointDisabled => "floating point disabled",
-            Self::LsxDisabled => "LSX disabled",
-            Self::LasxDisabled => "LASX disabled",
-            Self::FloatingPoint => "floating point exception",
-            Self::TlbRefill => "TLB refill",
-            Self::Unknown { code, subcode } => {
-                return write!(f, "unknown exception code {code}, subcode {subcode}");
-            }
-        };
-        f.write_str(description)
     }
 }

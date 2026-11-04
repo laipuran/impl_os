@@ -1,21 +1,21 @@
-//! Boot-time kernel tests, compiled only with the `ktest` feature.
+//! 启动期内核测试，仅在启用 `ktest` feature 时编译。
 
 struct Suite {
     name: &'static str,
     run: fn(),
 }
 
-// Keep suite selection separate from the runner and the normal boot path.
+// 将测试套件选择与运行器及正常启动路径分离。
 const SUITES: &[Suite] = &[Suite {
     name: "trap",
-    run: crate::arch::trap::tests::smoke_test,
+    run: crate::arch::trap::tests::kernel_test,
 }];
 
-/// Run the configured suites in declaration order after normal initialization.
+/// 正常初始化后，按声明顺序运行配置的测试套件。
 ///
-/// Call on the boot CPU with interrupts disabled. Suites must restore temporary
-/// mappings and machine state before returning; a failed assertion halts via
-/// the kernel panic handler, so the final success marker is never printed.
+/// 在禁用中断的 boot CPU 上调用。各套件必须在返回前恢复临时映射和机器状态；
+/// 断言失败会通过内核 panic handler 停机，
+/// 因此不会打印最终成功标记。
 pub fn run() {
     for suite in SUITES {
         crate::println!("{}: running {} tests", crate::arch::NAME, suite.name);

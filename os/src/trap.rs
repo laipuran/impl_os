@@ -1,22 +1,22 @@
-//! Trap initialization and fatal kernel-exception policy.
+//! Trap 初始化与内核致命异常处理策略。
 //!
-//! User exceptions return from the architecture's `run_user` with a saved frame;
-//! they do not enter this kernel-exception handler.
+//! 用户异常从架构的 `run_user` 返回，并保留保存的 frame；
+//! 不进入此内核异常处理函数。
 
 use crate::arch::trap::{self, TrapContext};
 
-/// Install the boot CPU's exception entry before entering user code.
+/// 在进入用户代码前安装 boot CPU 的异常入口。
 pub fn init() {
     trap::init();
 }
 
-/// Handle an exception taken while already executing kernel code.
+/// 处理执行内核代码时发生的异常。
 ///
-/// Interrupts stay disabled. There is no scheduler or recoverable kernel-fault
-/// policy yet; unexpected traps report the saved machine state and halt via panic.
+/// 中断保持禁用。目前尚无 scheduler 或可恢复的内核异常策略；
+/// 意外 trap 会报告保存的机器状态，并通过 panic 停机。
 pub fn handle_kernel(context: &mut TrapContext) {
     #[cfg(feature = "ktest")]
-    if trap::tests::handle_smoke_kernel(context) {
+    if trap::tests::handle_kernel_test(context) {
         return;
     }
 

@@ -1,17 +1,17 @@
-.section .text.trap_smoke,"ax"
+.section .text.trap_kernel_test,"ax"
 .option push
 .option norvc
 .option norelax
 
-.macro RV_SMOKE_CHECK reg, expected
+.macro RV_KERNEL_TEST_CHECK reg, expected
     li t0, \expected
-    bne \reg, t0, .Lrv_smoke_failed
+    bne \reg, t0, .Lrv_kernel_test_failed
 .endm
 
 .balign 4
-.globl riscv_smoke_kernel
-.type riscv_smoke_kernel, @function
-riscv_smoke_kernel:
+.globl riscv_kernel_test_kernel
+.type riscv_kernel_test_kernel, @function
+riscv_kernel_test_kernel:
     addi sp, sp, -128
     sd ra, 0(sp)
     sd gp, 8(sp)
@@ -59,48 +59,48 @@ riscv_smoke_kernel:
     li t4, 0x11d
     li t5, 0x11e
     li t6, 0x11f
-.globl riscv_smoke_kernel_break
-riscv_smoke_kernel_break:
+.globl riscv_kernel_test_kernel_break
+riscv_kernel_test_kernel_break:
     ebreak
-    # Check t0 before borrowing it to check every other restored GPR.
+    # 借用 t0 检查其他恢复的 GPR 前，先检查 t0。
     addi t0, t0, -0x205
-    bnez t0, .Lrv_smoke_failed
-    RV_SMOKE_CHECK ra, 0x201
-    RV_SMOKE_CHECK gp, 0x203
-    RV_SMOKE_CHECK tp, 0x204
-    RV_SMOKE_CHECK t1, 0x206
-    RV_SMOKE_CHECK t2, 0x207
-    RV_SMOKE_CHECK s0, 0x208
-    RV_SMOKE_CHECK s1, 0x209
-    RV_SMOKE_CHECK a0, 0x20a
-    RV_SMOKE_CHECK a1, 0x20b
-    RV_SMOKE_CHECK a2, 0x20c
-    RV_SMOKE_CHECK a3, 0x20d
-    RV_SMOKE_CHECK a4, 0x20e
-    RV_SMOKE_CHECK a5, 0x20f
-    RV_SMOKE_CHECK a6, 0x210
-    RV_SMOKE_CHECK a7, 0x211
-    RV_SMOKE_CHECK s2, 0x212
-    RV_SMOKE_CHECK s3, 0x213
-    RV_SMOKE_CHECK s4, 0x214
-    RV_SMOKE_CHECK s5, 0x215
-    RV_SMOKE_CHECK s6, 0x216
-    RV_SMOKE_CHECK s7, 0x217
-    RV_SMOKE_CHECK s8, 0x218
-    RV_SMOKE_CHECK s9, 0x219
-    RV_SMOKE_CHECK s10, 0x21a
-    RV_SMOKE_CHECK s11, 0x21b
-    RV_SMOKE_CHECK t3, 0x21c
-    RV_SMOKE_CHECK t4, 0x21d
-    RV_SMOKE_CHECK t5, 0x21e
-    RV_SMOKE_CHECK t6, 0x21f
+    bnez t0, .Lrv_kernel_test_failed
+    RV_KERNEL_TEST_CHECK ra, 0x201
+    RV_KERNEL_TEST_CHECK gp, 0x203
+    RV_KERNEL_TEST_CHECK tp, 0x204
+    RV_KERNEL_TEST_CHECK t1, 0x206
+    RV_KERNEL_TEST_CHECK t2, 0x207
+    RV_KERNEL_TEST_CHECK s0, 0x208
+    RV_KERNEL_TEST_CHECK s1, 0x209
+    RV_KERNEL_TEST_CHECK a0, 0x20a
+    RV_KERNEL_TEST_CHECK a1, 0x20b
+    RV_KERNEL_TEST_CHECK a2, 0x20c
+    RV_KERNEL_TEST_CHECK a3, 0x20d
+    RV_KERNEL_TEST_CHECK a4, 0x20e
+    RV_KERNEL_TEST_CHECK a5, 0x20f
+    RV_KERNEL_TEST_CHECK a6, 0x210
+    RV_KERNEL_TEST_CHECK a7, 0x211
+    RV_KERNEL_TEST_CHECK s2, 0x212
+    RV_KERNEL_TEST_CHECK s3, 0x213
+    RV_KERNEL_TEST_CHECK s4, 0x214
+    RV_KERNEL_TEST_CHECK s5, 0x215
+    RV_KERNEL_TEST_CHECK s6, 0x216
+    RV_KERNEL_TEST_CHECK s7, 0x217
+    RV_KERNEL_TEST_CHECK s8, 0x218
+    RV_KERNEL_TEST_CHECK s9, 0x219
+    RV_KERNEL_TEST_CHECK s10, 0x21a
+    RV_KERNEL_TEST_CHECK s11, 0x21b
+    RV_KERNEL_TEST_CHECK t3, 0x21c
+    RV_KERNEL_TEST_CHECK t4, 0x21d
+    RV_KERNEL_TEST_CHECK t5, 0x21e
+    RV_KERNEL_TEST_CHECK t6, 0x21f
     ld t0, 120(sp)
-    bne sp, t0, .Lrv_smoke_failed
+    bne sp, t0, .Lrv_kernel_test_failed
     li a0, 1
-    j .Lrv_smoke_finish
-.Lrv_smoke_failed:
+    j .Lrv_kernel_test_finish
+.Lrv_kernel_test_failed:
     li a0, 0
-.Lrv_smoke_finish:
+.Lrv_kernel_test_finish:
     ld ra, 0(sp)
     ld gp, 8(sp)
     ld tp, 16(sp)
@@ -118,17 +118,17 @@ riscv_smoke_kernel_break:
     ld s11, 112(sp)
     addi sp, sp, 128
     ret
-.size riscv_smoke_kernel, .-riscv_smoke_kernel
+.size riscv_kernel_test_kernel, .-riscv_kernel_test_kernel
 
 .balign 4
-.globl riscv_smoke_nested
-.type riscv_smoke_nested, @function
-riscv_smoke_nested:
-.globl riscv_smoke_nested_break
-riscv_smoke_nested_break:
+.globl riscv_kernel_test_nested
+.type riscv_kernel_test_nested, @function
+riscv_kernel_test_nested:
+.globl riscv_kernel_test_nested_break
+riscv_kernel_test_nested_break:
     ebreak
     ret
-.size riscv_smoke_nested, .-riscv_smoke_nested
+.size riscv_kernel_test_nested, .-riscv_kernel_test_nested
 
 .macro RV_ABI_CHECK reg, expected
     li t0, \expected
@@ -136,9 +136,9 @@ riscv_smoke_nested_break:
 .endm
 
 .balign 4
-.globl riscv_smoke_call_user
-.type riscv_smoke_call_user, @function
-riscv_smoke_call_user:
+.globl riscv_kernel_test_call_user
+.type riscv_kernel_test_call_user, @function
+riscv_kernel_test_call_user:
     addi sp, sp, -128
     sd ra, 0(sp)
     sd gp, 8(sp)
@@ -155,8 +155,8 @@ riscv_smoke_call_user:
     sd s9, 96(sp)
     sd s10, 104(sp)
     sd s11, 112(sp)
-    # Single-hart, nonrecursive probe: recover even if the call corrupts sp.
-    # Use only PC-relative addressing, never a potentially corrupted gp/tp.
+    # 单 hart、非递归探针：即使调用破坏 sp，也能恢复。
+    # 仅使用 PC-relative 寻址，不使用可能被破坏的 gp/tp。
     la t0, .Lrv_abi_stack
     sd sp, 0(t0)
     li s0, 0x708
@@ -171,7 +171,7 @@ riscv_smoke_call_user:
     li s9, 0x719
     li s10, 0x71a
     li s11, 0x71b
-    # gp/tp retain their valid platform values across the Rust ABI shim.
+    # gp/tp 在 Rust ABI shim 调用前后保留有效的平台值。
     call {run_user_shim}
 .Lrv_abi_return:
     la t0, .Lrv_abi_stack
@@ -198,7 +198,7 @@ riscv_smoke_call_user:
 .Lrv_abi_failed:
     li a0, 0
 .Lrv_abi_finish:
-    # All observations happen before restoring our caller's saved ABI state.
+    # 所有观察均发生在恢复调用者保存的 ABI 状态之前。
     mv sp, t1
     ld ra, 0(sp)
     ld gp, 8(sp)
@@ -217,31 +217,31 @@ riscv_smoke_call_user:
     ld s11, 112(sp)
     addi sp, sp, 128
     ret
-.size riscv_smoke_call_user, .-riscv_smoke_call_user
+.size riscv_kernel_test_call_user, .-riscv_kernel_test_call_user
 
-.pushsection .bss.trap_smoke,"aw",@nobits
+.pushsection .bss.trap_kernel_test,"aw",@nobits
 .balign 8
 .Lrv_abi_stack:
     .zero 8
 .popsection
 
 .balign 4
-.globl riscv_smoke_user_first
-riscv_smoke_user_first:
+.globl riscv_kernel_test_user_first
+riscv_kernel_test_user_first:
     ecall
-    # A wrong PC update must fail, not accidentally reach the resume probe.
+    # PC 更新错误必须导致失败，而不能意外到达恢复执行探针。
     .word 0
-.globl riscv_smoke_user_second
-riscv_smoke_user_second:
+.globl riscv_kernel_test_user_second
+riscv_kernel_test_user_second:
     ecall
     .word 0
-.globl riscv_smoke_user_privileged
-riscv_smoke_user_privileged:
+.globl riscv_kernel_test_user_privileged
+riscv_kernel_test_user_privileged:
     csrw sscratch, zero
     .word 0
-.globl riscv_smoke_user_float
-riscv_smoke_user_float:
-    # fadd.s f0,f0,f0: FS=Off must raise an illegal-instruction exception.
+.globl riscv_kernel_test_user_float
+riscv_kernel_test_user_float:
+    # fadd.s f0,f0,f0：FS=Off 必须触发非法指令异常。
     .word 0x00000053
     .word 0
 .option pop

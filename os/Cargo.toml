@@ -11,8 +11,9 @@ test = false
 bench = false
 
 [features]
-# Explicit boot-time checks; never enable permissive user mappings by default.
+# 显式启用启动时检查；默认不得放宽用户态映射权限。
 ktest = []
 
 [dependencies]
 log = { version = "0.4", default-features = false }
+thiserror = { version = "2", default-features = false }

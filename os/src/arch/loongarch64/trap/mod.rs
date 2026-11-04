@@ -1,24 +1,24 @@
-//! Single-CPU integer-only exception handling. SAVE0..SAVE3 are reserved here.
+//! 单处理器、仅整数状态的异常处理；此处保留 SAVE0..SAVE3。
 //!
-//! Interrupts and floating-point/vector execution stay disabled. Production
-//! code must supply its own user mappings; the boot DMW is PLV0-only.
+//! 中断以及浮点、向量执行始终关闭。实际运行的代码必须
+//! 自行提供用户映射；启动时的直接映射窗口仅允许 PLV0 访问。
 
 use core::arch::{asm, global_asm};
 
 pub mod cause;
 use cause::TrapCause;
 
-/// Integer registers and exception CSRs captured before entering Rust.
+/// 进入 Rust 前捕获的整数寄存器和异常 CSR。
 ///
-/// GPR indices are architectural numbers (r0..r31); r3 is the stack pointer
-/// and r2 is the thread pointer. Only GPRs and the exception PC are writable
-/// through the public API. FP, LSX and LASX are unsupported.
+/// 通用寄存器按架构编号 r0..r31 索引；r3 为栈指针，
+/// r2 为线程指针。公开接口仅允许修改通用寄存器和异常
+/// 程序计数器。不支持浮点、LSX 和 LASX。
 ///
-/// Ordinary traps capture ERA, PRMD, ESTAT and BADV. Refill traps instead
-/// capture TLBRERA/TLBRBADV, normalize TLBRPRMD.PWE into PRMD bit 3, and tag
-/// ESTAT with bit 63 because ESTAT.Ecode is stale. Thus the saved `era`,
-/// `prmd` and `estat` are normalized return state, not always raw CSR values.
-/// Refill faults are reported, not resolved by walking page tables.
+/// 普通陷阱捕获 ERA、PRMD、ESTAT 和 BADV。重填陷阱则
+/// 捕获 TLBRERA/TLBRBADV，将 TLBRPRMD.PWE 规范化至 PRMD 位 3，
+/// 并在 ESTAT 位 63 添加标记，因为此时 ESTAT.Ecode 已过期。因此保存的
+/// `era`、`prmd`、`estat` 是规范化的返回状态，不一定是原始 CSR 值。
+/// 仅报告重填异常，不通过遍历页表解决异常。
 #[repr(C)]
 pub struct TrapContext {
     gpr: [usize; 32],
@@ -29,12 +29,12 @@ pub struct TrapContext {
 }
 
 impl TrapContext {
-    /// Construct a PLV3 context with interrupts and extension state disabled.
+    /// 构造关闭中断和扩展状态的 PLV3 上下文。
     ///
-    /// `entry` must be a four-byte-aligned user-executable address; `stack`
-    /// must be a 16-byte-aligned writable user stack top. Neither is mapped
-    /// or validated here, and this mechanism provides no memory isolation.
-    #[allow(dead_code)] // Public execution API; boot only uses it in ktest.
+    /// `entry` 必须为四字节对齐的用户可执行地址；`stack`
+    /// 必须为 16 字节对齐的可写用户栈顶。此处不映射、
+    /// 不校验这些地址，也不提供内存隔离。
+    #[allow(dead_code)] // 公开执行接口；启动流程仅在内核测试中使用。
     pub fn user(entry: usize, stack: usize) -> Self {
         let mut gpr = [0; 32];
         gpr[3] = stack;
@@ -47,63 +47,63 @@ impl TrapContext {
         }
     }
 
-    /// Return GPRs indexed by architectural register number.
-    #[allow(dead_code)] // Public context inspection API.
+    /// 按架构寄存器编号返回通用寄存器。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn registers(&self) -> &[usize; 32] {
         &self.gpr
     }
 
-    /// Edit GPRs; r0 remains hardwired to zero when execution resumes.
-    #[allow(dead_code)] // Public execution API.
+    /// 修改通用寄存器；恢复执行时 r0 仍恒为零。
+    #[allow(dead_code)] // 公开执行接口。
     pub fn registers_mut(&mut self) -> &mut [usize; 32] {
         &mut self.gpr
     }
 
-    /// Return ERA, or the normalized TLBRERA PC for a refill.
-    #[allow(dead_code)] // Public context inspection API.
+    /// 返回 ERA，重填时返回规范化的 TLBRERA 程序计数器。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn pc(&self) -> usize {
         self.era
     }
 
-    /// Set the next exception-return PC without changing privilege state.
-    #[allow(dead_code)] // Public execution API.
+    /// 设置下一异常返回程序计数器，不改变特权状态。
+    #[allow(dead_code)] // 公开执行接口。
     pub fn set_pc(&mut self, pc: usize) {
         self.era = pc;
     }
 
-    /// Return the saved architectural stack pointer (r3).
-    #[allow(dead_code)] // Public context inspection API.
+    /// 返回保存的架构栈指针（r3）。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn sp(&self) -> usize {
         self.gpr[3]
     }
 
-    /// Decode ESTAT, giving the synthetic refill tag priority over Ecode.
-    #[allow(dead_code)] // Public context inspection API.
+    /// 解码 ESTAT，合成的重填标记优先于 Ecode。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn cause(&self) -> TrapCause {
         TrapCause::from_estat(self.estat)
     }
 
-    /// Return ESTAT with bit 63 set for a refill; not an unmodified CSR dump.
-    #[allow(dead_code)] // Public context inspection API.
+    /// 返回 ESTAT，重填时位 63 置一；并非未经修改的 CSR 快照。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn raw_cause(&self) -> usize {
         self.estat
     }
 
-    /// Return PRMD, or normalized TLBRPRMD with PWE moved to PRMD bit 3.
-    #[allow(dead_code)] // Public context inspection API.
+    /// 返回 PRMD，或将 PWE 移至 PRMD 位 3 后的规范化 TLBRPRMD。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn raw_status(&self) -> usize {
         self.prmd
     }
 
-    /// Return BADV, or TLBRBADV for a refill.
-    #[allow(dead_code)] // Public context inspection API.
+    /// 返回 BADV，重填时返回 TLBRBADV。
+    #[allow(dead_code)] // 公开上下文查看接口。
     pub fn bad_addr(&self) -> usize {
         self.badv
     }
 }
 
-// Context offsets feed every assembly GPR access; frames and addi.d/ld.d
-// displacements must fit signed 12-bit immediates and keep the ABI alignment.
+// 上下文偏移用于所有汇编通用寄存器访问；栈帧及 addi.d/ld.d
+// 位移必须适配有符号 12 位立即数，并保持 ABI 对齐。
 const _: () = {
     assert!(core::mem::size_of::<usize>() == 8);
     assert!(core::mem::offset_of!(TrapContext, gpr) % 8 == 0);
@@ -114,6 +114,7 @@ const _: () = {
 
 global_asm!(
     include_str!("entry.S"),
+    include_str!("return.S"),
     frame_size = const core::mem::size_of::<TrapContext>(),
     gpr = const core::mem::offset_of!(TrapContext, gpr),
     word = const core::mem::size_of::<usize>(),
@@ -129,14 +130,14 @@ extern "C" {
     fn __loongarch_run_user(context: *mut TrapContext);
 }
 
-/// Install aligned direct/refill vectors and reserve SAVE0..SAVE3.
+/// 安装对齐的直接异常及重填向量，并保留 SAVE0..SAVE3。
 ///
-/// Call once at PLV0 with a valid kernel stack, before executing user code.
-/// ECFG.VS and all interrupt enables are cleared; EUEN disables FP/LSX/LASX.
-/// SAVE3 retains the kernel ABI thread pointer for Rust trap handlers.
+/// 在 PLV0、内核栈有效时调用一次，且须早于执行用户代码。
+/// 清除 ECFG.VS 及所有中断使能；EUEN 关闭浮点、LSX、LASX。
+/// SAVE3 保留 Rust 陷阱处理函数所需的内核 ABI 线程指针。
 pub fn init() {
-    // SAFETY: early single-CPU kernel initialization owns these privileged
-    // CSRs. The assembly vector is 4096-byte aligned and permanently mapped.
+    // SAFETY: 单处理器内核早期初始化独占这些特权 CSR。
+    // 汇编向量按 4096 字节对齐，并保持永久映射。
     unsafe {
         asm!(
             "li.w {tmp}, 4",
@@ -162,26 +163,26 @@ pub fn init() {
     }
 }
 
-/// Enter PLV3 and return on any user exception with its complete integer state.
+/// 进入 PLV3，在任意用户异常发生时返回并保存全部整数状态。
 ///
-/// PRMD is overwritten with PPLV=3, PIE=0, PWE=0 even for a context containing
-/// hostile saved state; privileged return state cannot leak into user execution.
-/// The kernel stack, thread pointer and ABI callee-saved registers survive.
+/// 即便上下文包含恶意状态，也会将 PRMD 改写为 PPLV=3、PIE=0、PWE=0；
+/// 特权返回状态不会泄漏到用户执行环境。
+/// 内核栈、线程指针和 ABI 被调用者保存寄存器在切换后保持不变。
 ///
 /// # Safety
-/// Call at PLV0 on the initialized boot CPU with interrupts disabled. The
-/// context must remain exclusively owned and mapped at PLV0 throughout the
-/// transition. PC and stack must have instruction/ABI alignment; unmapped
-/// accesses are reported as traps rather than resolved. The caller must
-/// ensure user execution cannot overwrite kernel state (including this
-/// context and the suspended kernel stack). No mappings
-/// or memory isolation are created here. FP/vector instructions intentionally
-/// trap because EUEN is zero; no extension register state is preserved.
-#[allow(dead_code)] // Public execution API; boot only uses it in ktest.
+/// 在已初始化的启动处理器上以 PLV0 调用，并关闭中断。
+/// 整个切换过程中，上下文必须保持由调用者独占，且在 PLV0
+/// 可访问。程序计数器与栈必须满足指令和 ABI 对齐；未映射
+/// 访问会作为陷阱报告，而不会被自动解决。调用者必须
+/// 确保用户执行不能覆盖内核状态（包括此上下文
+/// 和暂停执行的内核栈）。此处不创建映射，
+/// 也不提供内存隔离。由于 EUEN 为零，浮点和向量指令会刻意
+/// 触发陷阱；不保存任何扩展寄存器状态。
+#[allow(dead_code)] // 公开执行接口；启动流程仅在内核测试中使用。
 pub unsafe fn run_user(context: &mut TrapContext) {
     context.prmd = 3;
-    // SAFETY: the caller guarantees mapped state and exclusive single-CPU
-    // execution; assembly saves the kernel ABI frame before changing privilege.
+    // SAFETY: 调用者保证状态已映射，并独占单处理器执行；
+    // 汇编在改变特权级前保存内核 ABI 栈帧。
     unsafe { __loongarch_run_user(context) };
 }
 

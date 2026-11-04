@@ -1,4 +1,4 @@
-//! Feature-only real trap probes; no emulation or production user-memory policy.
+//! 仅由 feature 启用的真实 trap 探针；不模拟执行，也不提供生产环境用户内存策略。
 
 use core::arch::{asm, global_asm};
 
@@ -8,15 +8,15 @@ use super::{run_user, TrapContext, DISABLED_STATUS, USER_STATUS};
 global_asm!(include_str!("probes.S"), run_user_shim = sym run_user_shim);
 
 extern "C" {
-    fn riscv_smoke_kernel() -> usize;
-    fn riscv_smoke_kernel_break();
-    fn riscv_smoke_nested();
-    fn riscv_smoke_nested_break();
-    fn riscv_smoke_call_user(context: &mut TrapContext) -> usize;
-    fn riscv_smoke_user_first();
-    fn riscv_smoke_user_second();
-    fn riscv_smoke_user_privileged();
-    fn riscv_smoke_user_float();
+    fn riscv_kernel_test_kernel() -> usize;
+    fn riscv_kernel_test_kernel_break();
+    fn riscv_kernel_test_nested();
+    fn riscv_kernel_test_nested_break();
+    fn riscv_kernel_test_call_user(context: &mut TrapContext) -> usize;
+    fn riscv_kernel_test_user_first();
+    fn riscv_kernel_test_user_second();
+    fn riscv_kernel_test_user_privileged();
+    fn riscv_kernel_test_user_float();
 }
 
 #[repr(C, align(16))]
@@ -25,8 +25,8 @@ struct UserStack([u8; 4096]);
 static mut USER_STACK: UserStack = UserStack([0; 4096]);
 
 unsafe extern "C" fn run_user_shim(context: &mut TrapContext) {
-    // SAFETY: the assembly wrapper is called only with the smoke's exclusively
-    // owned context, fixed user code, and valid private stack after trap init.
+    // SAFETY: 汇编 wrapper 仅在 trap 初始化后使用内核测试独占的 context、
+    // 固定用户代码及有效的私有栈调用。
     unsafe { run_user(context) };
 }
 
@@ -56,7 +56,7 @@ fn assert_kernel_environment() {
     let scratch: usize;
     let status: usize;
     let thread_pointer: usize;
-    // SAFETY: these probes execute only in the single boot hart's S-mode test.
+    // SAFETY: 这些探针仅在单个 boot hart 的 S-mode 测试中执行。
     unsafe {
         asm!(
             "csrr {scratch}, sscratch",
@@ -69,7 +69,7 @@ fn assert_kernel_environment() {
         );
     }
     assert_eq!(scratch, 0, "kernel sscratch invariant");
-    // sret sets SPIE=1 architecturally, but live SIE must remain zero.
+    // sret 按架构规则设置 SPIE=1，但当前 SIE 必须保持为零。
     assert_eq!(
         status & (DISABLED_STATUS & !(1 << 5)),
         0,
@@ -93,14 +93,14 @@ fn assert_kernel_registers(context: &TrapContext) {
     }
 }
 
-/// Recognize only the two exact supervisor breakpoint PCs owned by this smoke.
-/// All other traps remain subject to the shared fatal kernel-trap policy.
-pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
+/// 仅识别此内核测试拥有的两个精确 supervisor breakpoint PC。
+/// 其他 trap 仍由共用的内核致命 trap 策略处理。
+pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
         return false;
     }
-    let outer = riscv_smoke_kernel_break as *const () as usize;
-    let nested = riscv_smoke_nested_break as *const () as usize;
+    let outer = riscv_kernel_test_kernel_break as *const () as usize;
+    let nested = riscv_kernel_test_nested_break as *const () as usize;
     if context.pc() != outer && context.pc() != nested {
         return false;
     }
@@ -110,11 +110,11 @@ pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
     assert!(context.bad_addr() == 0 || context.bad_addr() == context.pc());
     if context.pc() == outer {
         assert_kernel_registers(context);
-        // SAFETY: this assembly leaf raises one known breakpoint on the current
-        // aligned kernel stack; its exact PC is handled by the branch below.
-        unsafe { riscv_smoke_nested() };
+        // SAFETY: 此汇编叶函数在当前对齐的内核栈上触发一个已知 breakpoint；
+        // 下方分支会处理其精确 PC。
+        unsafe { riscv_kernel_test_nested() };
         assert_kernel_environment();
-        assert_kernel_registers(context); // The inner frame must not alias this one.
+        assert_kernel_registers(context); // 内层 frame 不得与此外层 frame 重叠。
         for (index, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
             if index != 2 {
                 *value = 0x200 + index;
@@ -123,10 +123,10 @@ pub fn handle_smoke_kernel(context: &mut TrapContext) -> bool {
     } else {
         assert_eq!(context.sp() & 15, 0, "nested kernel sp alignment");
     }
-    // Test kernel-return sanitation as well as initial hardware capture: clearing
-    // SPP must not return to U mode, and these interrupt/extension bits must drop.
+    // 除初始硬件状态保存外，也测试内核返回时的状态清理：清除 SPP
+    // 不得返回 U mode，且这些中断及扩展位必须被清除。
     context.sstatus = (context.sstatus & !(1 << 8)) | DISABLED_STATUS;
-    context.set_pc(context.pc() + 4); // Both sites force non-compressed instructions.
+    context.set_pc(context.pc() + 4); // 两处均强制使用非压缩指令。
     true
 }
 
@@ -151,43 +151,47 @@ fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usi
     assert_kernel_environment();
 }
 
-/// Exercise decoding, nested S-mode ebreak, and four real U-mode ABI round trips.
+/// 测试解码、嵌套 S-mode ebreak 及四次真实 U-mode ABI 往返。
 ///
-/// The user probes require SBI PMP to permit RAM in bare mode. They neither map
-/// memory nor provide isolation, and execute only these fixed trusted snippets.
-pub fn smoke_test() {
+/// 用户探针要求 SBI PMP 在 bare mode 下允许访问 RAM。它们不映射内存，
+/// 也不提供隔离，仅执行这些固定且可信的代码片段。
+pub fn kernel_test() {
     assert_cause_decoding();
     assert_kernel_environment();
-    // SAFETY: the assembly saves the kernel ABI, loads sentinel registers, and
-    // raises the exact smoke breakpoint recognized by handle_smoke_kernel.
-    assert_eq!(unsafe { riscv_smoke_kernel() }, 1, "kernel GPR restore");
+    // SAFETY: 汇编保存内核 ABI，加载哨兵寄存器值，
+    // 并触发 handle_kernel_test 识别的精确内核测试 breakpoint。
+    assert_eq!(
+        unsafe { riscv_kernel_test_kernel() },
+        1,
+        "kernel GPR restore"
+    );
     assert_kernel_environment();
 
     let stack = core::ptr::addr_of_mut!(USER_STACK) as usize + core::mem::size_of::<UserStack>();
-    let first = riscv_smoke_user_first as *const () as usize;
-    let second = riscv_smoke_user_second as *const () as usize;
-    let privileged = riscv_smoke_user_privileged as *const () as usize;
-    let float = riscv_smoke_user_float as *const () as usize;
+    let first = riscv_kernel_test_user_first as *const () as usize;
+    let second = riscv_kernel_test_user_second as *const () as usize;
+    let privileged = riscv_kernel_test_user_privileged as *const () as usize;
+    let float = riscv_kernel_test_user_float as *const () as usize;
     let mut context = TrapContext::user(first, stack);
     set_user_registers(&mut context, 0x300, stack);
-    context.sstatus = usize::MAX; // Entry must discard even hostile privilege bits.
-                                  // SAFETY: fixed user code and an aligned private stack are in PMP-accessible
-                                  // RAM; the assembly wrapper preserves valid kernel gp/tp and checks the Rust
-                                  // run_user call's ABI before restoring its own caller's state.
+    context.sstatus = usize::MAX; // 入口必须丢弃恶意特权位。
+                                  // SAFETY: 固定用户代码与对齐私有栈位于 PMP 可访问的 RAM 中；
+                                  // 汇编 wrapper 保留有效的内核 gp/tp，并在恢复调用者状态前
+                                  // 检查 Rust run_user 调用的 ABI。
     assert_eq!(
-        unsafe { riscv_smoke_call_user(&mut context) },
+        unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
         "initial user-call ABI",
     );
     assert_user_context(&context, 0x300, stack, first, 8);
     assert_eq!(context.bad_addr(), 0);
 
-    context.set_pc(second); // Skip the deliberate illegal instruction after ecall.
+    context.set_pc(second); // 跳过 ecall 后故意设置的非法指令。
     set_user_registers(&mut context, 0x400, stack - 16);
-    // SAFETY: same valid private memory and fixed trapping code as above; this
-    // reentry must honor the edited user context and still preserve the call ABI.
+    // SAFETY: 使用与上文相同的有效私有内存和固定 trap 代码；
+    // 再次进入时必须采用修改后的用户 context，且仍保留调用 ABI。
     assert_eq!(
-        unsafe { riscv_smoke_call_user(&mut context) },
+        unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
         "resumed user-call ABI",
     );
@@ -196,9 +200,9 @@ pub fn smoke_test() {
 
     context.set_pc(privileged);
     set_user_registers(&mut context, 0x500, stack - 32);
-    // SAFETY: the CSR instruction must fault in U mode and does not access data.
+    // SAFETY: 此 CSR 指令必须在 U mode 触发异常，且不访问数据。
     assert_eq!(
-        unsafe { riscv_smoke_call_user(&mut context) },
+        unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
         "privileged user-call ABI",
     );
@@ -207,13 +211,13 @@ pub fn smoke_test() {
 
     context.set_pc(float);
     set_user_registers(&mut context, 0x600, stack - 48);
-    // SAFETY: the fixed FP instruction must fault with FS Off; it touches no RAM.
+    // SAFETY: 固定 FP 指令必须在 FS Off 时触发异常，且不访问 RAM。
     assert_eq!(
-        unsafe { riscv_smoke_call_user(&mut context) },
+        unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
         "FP user-call ABI",
     );
     assert_user_context(&context, 0x600, stack - 48, float, 2);
     assert!(context.bad_addr() == 0 || context.bad_addr() == 0x53);
-    crate::println!("riscv64: trap smoke passed");
+    crate::println!("riscv64: trap kernel tests passed");
 }

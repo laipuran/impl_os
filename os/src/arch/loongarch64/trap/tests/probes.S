@@ -1,8 +1,8 @@
-.section .text.trap_smoke,"ax"
+.section .text.trap_kernel_test,"ax"
 .balign 4
 
-# Only feature-only single-CPU wrappers use these trusted recovery pointers.
-# A damaged restored sp must not prevent restoring the wrapper caller's ABI.
+# 仅由 feature 启用的单 CPU wrapper 使用这些可信恢复指针。
+# 恢复后的 sp 即使损坏，也不得妨碍恢复 wrapper 调用者的 ABI。
 .macro save_probe_abi slot
     addi.d $sp, $sp, -128
     st.d $ra, $sp, 16
@@ -52,10 +52,10 @@
     bne \register, $t0, .Lcall_fail
 .endm
 
-.global __loongarch_smoke_kernel
-.type __loongarch_smoke_kernel, @function
-__loongarch_smoke_kernel:
-    # Preserve every kernel ABI register that the sentinel test overwrites.
+.global __loongarch_kernel_test_kernel
+.type __loongarch_kernel_test_kernel, @function
+__loongarch_kernel_test_kernel:
+    # 保存哨兵测试覆盖的所有内核 ABI 寄存器。
     save_probe_abi .Lkernel_saved_sp
     li.w $r1, 0x601
     li.w $r2, 0x602
@@ -87,10 +87,10 @@ __loongarch_smoke_kernel:
     li.w $r29, 0x61d
     li.w $r30, 0x61e
     li.w $r31, 0x61f
-.global __loongarch_smoke_kernel_break
-__loongarch_smoke_kernel_break:
+.global __loongarch_kernel_test_kernel_break
+__loongarch_kernel_test_kernel_break:
     break 0
-    # Self-check restored t0 before using it as the comparison scratch.
+    # 将恢复后的 t0 用作比较临时寄存器前，先检查其自身。
     addi.d $t0, $t0, -0x70c
     bnez $t0, .Lkernel_fail
     check_kernel_gpr $r1, 1
@@ -130,16 +130,16 @@ __loongarch_smoke_kernel_break:
 .Lkernel_fail:
     move $a0, $zero
 .Lkernel_restore:
-    # No caller restoration above can mask an incorrectly restored GPR.
+    # 上方未恢复调用者状态，因此不会掩盖错误恢复的 GPR。
     restore_probe_abi .Lkernel_saved_sp
-.size __loongarch_smoke_kernel, .-__loongarch_smoke_kernel
+.size __loongarch_kernel_test_kernel, .-__loongarch_kernel_test_kernel
 
-.global __loongarch_smoke_call_abi
-.type __loongarch_smoke_call_abi, @function
-__loongarch_smoke_call_abi:
+.global __loongarch_kernel_test_call_abi
+.type __loongarch_kernel_test_call_abi, @function
+__loongarch_kernel_test_call_abi:
     save_probe_abi .Lcall_saved_sp
-    # tp and reserved r21 must retain their valid platform values across Rust.
-    # Only ordinary callee-saved registers receive synthetic sentinels.
+    # tp 与保留的 r21 在 Rust 调用前后必须保留有效的平台值。
+    # 仅为普通 callee-saved 寄存器设置合成哨兵值。
     li.w $fp, 0x816
     li.w $s0, 0x817
     li.w $s1, 0x818
@@ -151,7 +151,7 @@ __loongarch_smoke_call_abi:
     li.w $s7, 0x81e
     li.w $s8, 0x81f
     bl {run_user}
-    # Validate before restoring our caller, including the real platform state.
+    # 恢复调用者前完成检查，包括真实平台状态。
     la.local $t0, .Lcall_saved_sp
     ld.d $t0, $t0, 0
     bne $sp, $t0, .Lcall_fail
@@ -175,46 +175,46 @@ __loongarch_smoke_call_abi:
     move $a0, $zero
 .Lcall_restore:
     restore_probe_abi .Lcall_saved_sp
-.size __loongarch_smoke_call_abi, .-__loongarch_smoke_call_abi
+.size __loongarch_kernel_test_call_abi, .-__loongarch_kernel_test_call_abi
 
 
-.global __loongarch_smoke_nested
-.global __loongarch_smoke_nested_break
-.type __loongarch_smoke_nested, @function
-__loongarch_smoke_nested:
-__loongarch_smoke_nested_break:
+.global __loongarch_kernel_test_nested
+.global __loongarch_kernel_test_nested_break
+.type __loongarch_kernel_test_nested, @function
+__loongarch_kernel_test_nested:
+__loongarch_kernel_test_nested_break:
     break 0
     jr $ra
-.size __loongarch_smoke_nested, .-__loongarch_smoke_nested
+.size __loongarch_kernel_test_nested, .-__loongarch_kernel_test_nested
 
-.global __loongarch_smoke_refill
-.global __loongarch_smoke_refill_load
-.type __loongarch_smoke_refill, @function
-__loongarch_smoke_refill:
-__loongarch_smoke_refill_load:
+.global __loongarch_kernel_test_refill
+.global __loongarch_kernel_test_refill_load
+.type __loongarch_kernel_test_refill, @function
+__loongarch_kernel_test_refill:
+__loongarch_kernel_test_refill_load:
     ld.d $zero, $a0, 0
     jr $ra
-.size __loongarch_smoke_refill, .-__loongarch_smoke_refill
+.size __loongarch_kernel_test_refill, .-__loongarch_kernel_test_refill
 
-.global __loongarch_smoke_user_first
-__loongarch_smoke_user_first:
+.global __loongarch_kernel_test_user_first
+__loongarch_kernel_test_user_first:
     syscall 0
-    # The kernel must explicitly replace ERA, not blindly advance into this.
+    # 内核必须显式替换 ERA，不能盲目前移到此处。
     break 0
-.global __loongarch_smoke_user_second
-__loongarch_smoke_user_second:
+.global __loongarch_kernel_test_user_second
+__loongarch_kernel_test_user_second:
     syscall 0
     break 0
-.global __loongarch_smoke_user_privileged
-__loongarch_smoke_user_privileged:
+.global __loongarch_kernel_test_user_privileged
+__loongarch_kernel_test_user_privileged:
     csrrd $zero, 0x0
     break 0
-.global __loongarch_smoke_user_float
-__loongarch_smoke_user_float:
+.global __loongarch_kernel_test_user_float
+__loongarch_kernel_test_user_float:
     fadd.d $fa0, $fa0, $fa0
     break 0
 
-.section .bss.trap_smoke,"aw",@nobits
+.section .bss.trap_kernel_test,"aw",@nobits
 .balign 8
 .Lkernel_saved_sp:
     .space 8
