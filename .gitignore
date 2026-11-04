@@ -8,3 +8,4 @@
 *.img.xz
 __pycache__/
 *.pyc
+/vendor/*/.cargo-checksum.json

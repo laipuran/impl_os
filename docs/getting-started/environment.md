@@ -6,7 +6,7 @@
 - 开发镜像：从上述原始镜像派生，安装校验 SHA256 的 just **1.40.0**，以及固定 Rust 工具链配套的 `rust-analyzer`、`rust-src`；不替换编译器、QEMU 或固件。
 - 开发语言：Rust；`nightly-2025-01-18`，edition 2021。
 - 目标：`riscv64gc-unknown-none-elf`、`loongarch64-unknown-none`。
-- 当前依赖 `log` 和 `thiserror`，均禁用默认特性以用于 `no_std`；`thiserror` 的派生宏在宿主编译，生成的原因格式化代码不依赖 `std`。依赖通过常规 Cargo registry 获取，版本由 `Cargo.lock` 锁定，首次构建前执行 `cargo fetch --locked` 准备本地缓存，不需要 `cargo install` 或通过交叉 GCC 链接当前内核。原始比赛镜像未必缓存新增依赖，断网构建不在本轮验证范围内。
+- 当前依赖 `log` 和 `thiserror`，均禁用默认特性以用于 `no_std`；`thiserror` 的派生宏在宿主编译，生成的原因格式化代码不依赖 `std`。依赖版本由 `Cargo.lock` 锁定，首次构建直接使用仓库已提交的 `vendor/`，无需执行 `cargo fetch` 或 `just vendor`。新增或更新依赖的流程见[开发约定](../development/README.md#更新离线依赖)。当前内核不需要 `cargo install` 或通过交叉 GCC 链接。
 
 该镜像提供 Ubuntu **24.04.4**、QEMU **10.0.2** 和 RISC-V 默认固件 OpenSBI **1.5.1**。开发环境固定这套工具；最终比赛的启动参数和资源限制由比赛规则确定。
 

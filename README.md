@@ -30,7 +30,7 @@ just test            # 可选：全部内核自检；默认 rv release，可追�
 
 RISC-V 启动后通过 SBI 请求关机；LoongArch 启动后停放 CPU，QEMU 不会自动退出，可按 `Ctrl-a x` 退出。
 
-`make all` 使用 Cargo 的 `--locked --offline`，需要预先准备固定工具链、目标标准库和 `Cargo.lock` 中依赖的本地缓存。环境配置见[环境准备](docs/getting-started/environment.md)。普通的 `cargo build` 没有指定裸机 target，不是本项目的构建入口。
+`make all` 使用 Cargo 的 `--locked --offline`，通过显式配置读取仓库已提交的 `vendor/`，无需预填 registry 缓存；环境仍须提供固定工具链和目标标准库。环境配置见[环境准备](docs/getting-started/environment.md)。普通的 `cargo build` 没有指定裸机 target，不是本项目的构建入口。
 
 ## 目录职责
 
@@ -59,7 +59,7 @@ just container just check
 just judge-build      # 原始比赛镜像，断网、独立构建目录；不启动内核
 ```
 
-`judge-build` 使用基础镜像中的 Cargo 缓存，不下载依赖；缓存缺失时离线构建会失败。
+`judge-build` 在原始比赛镜像中关闭网络，过滤源码中的隐藏文件和目录，并使用空 Cargo 缓存及独立构建目录验证双架构离线构建。新增或更新依赖后，须执行 `just vendor`，一并提交依赖清单、`Cargo.lock` 和 `vendor/` 的变更，详见[依赖更新流程](docs/development/README.md#更新离线依赖)。
 
 ## 构建与提交约定
 

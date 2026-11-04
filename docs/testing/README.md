@@ -6,11 +6,13 @@
 | --- | --- | --- |
 | 容器内 `just check` | Rust 格式、双架构 Clippy | 链接产物、启动行为、内核功能 |
 | 容器内 `just build` / `make all` | 两架构 ELF 构建与导出 | 启动及运行时语义 |
-| 宿主 `just judge-build` | 原始比赛镜像断网，使用独立 Cargo 缓存构建 | 源码过滤、启动、评分 |
+| 宿主 `just judge-build` | 原始比赛镜像断网，过滤隐藏文件和目录，以空 Cargo 缓存及独立构建目录构建双架构 ELF | 启动、评分 |
 | 容器内 `just run rv` / `just run la` | 手动观察启动日志和进程退出 | 官方用户程序的正确性 |
 | 容器内 `just test [rv\|la] [release\|debug]` | 构建启用 `ktest` 的 ELF 并执行全部已接入内核自检；目前覆盖 trap | 未实现的测试功能、官方用户程序 |
 
 当前有统一的启动期内核自检入口，通过静态具名测试组列表组织各模块测试，没有自动注册、名称筛选或官方测试集运行入口。格式和构建检查不能替代运行时功能测试。
+
+`judge-build` 在容器临时目录中复制源码，排除隐藏文件和目录、本地 `target/`、`artifacts/` 及根目录已有 ELF；只将成功构建的两个 ELF 复制回仓库。原始镜像必须预先存在，并提供固定工具链及两个目标的标准库；命令不会拉取镜像或安装工具链。
 
 ## 当前运行行为
 
@@ -62,6 +64,7 @@ LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小�
 特性分支的静态检查需显式传入功能：
 
 ```sh
-cargo clippy --locked --offline -p impl-os --target riscv64gc-unknown-none-elf --features ktest -- -D warnings
-cargo clippy --locked --offline -p impl-os --target loongarch64-unknown-none --features ktest -- -D warnings
+make prepare-vendor
+cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target riscv64gc-unknown-none-elf --features ktest -- -D warnings
+cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target loongarch64-unknown-none --features ktest -- -D warnings
 ```
