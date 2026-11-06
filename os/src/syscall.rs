@@ -1,7 +1,7 @@
-//! Linux syscall 的整数寄存器 ABI。
+//! Linux syscall 的整数寄存器 ABI 与最小调用分发。
 //!
-//! [`decode`] 只读取现场；[`complete`] 在调用正常返回时写回结果并跳过
-//! syscall 指令。退出、替换程序或重启调用的路径不应调用 `complete`。
+//! [`decode`] 只读取现场；[`dispatch`] 决定返回或退出；[`complete`] 在调用
+//! 正常返回时写回结果并跳过 syscall 指令。退出路径不应调用 `complete`。
 
 use crate::arch::{syscall as syscall_abi, trap::TrapContext};
 
@@ -9,7 +9,6 @@ use crate::arch::{syscall as syscall_abi, trap::TrapContext};
 ///
 /// 参数保留全部位，不解引用用户指针，也不按具体调用解释有符号数。
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // 用户执行循环接入前，仅由 ktest 使用。
 pub struct SyscallRequest {
     /// Linux 调用号；未知调用号同样保留，交给分发层处理。
     pub number: usize,
@@ -18,7 +17,6 @@ pub struct SyscallRequest {
 }
 
 /// 解码用户 syscall；内核调用、中断和其他异常返回 `None`，不修改现场。
-#[allow(dead_code)] // 用户执行循环接入前，仅由 ktest 使用。
 pub fn decode(context: &TrapContext) -> Option<SyscallRequest> {
     if !syscall_abi::is_syscall(context) {
         return None;
@@ -42,7 +40,6 @@ pub fn decode(context: &TrapContext) -> Option<SyscallRequest> {
 /// 调用者须保证每次陷阱只完成一次；保存的异常原因不会因写回而清除。
 /// 退出、exec 和重启调用应采用各自的现场处理。
 #[must_use]
-#[allow(dead_code)] // 用户执行循环接入前，仅由 ktest 使用。
 pub fn complete(context: &mut TrapContext, result: isize) -> bool {
     if !syscall_abi::is_syscall(context) {
         return false;
@@ -53,6 +50,26 @@ pub fn complete(context: &mut TrapContext, result: isize) -> bool {
     context.registers_mut()[syscall_abi::ARGUMENT_START] = result as usize;
     context.set_pc(next_pc);
     true
+}
+
+/// 调用分发后，执行循环应采取的动作。
+pub enum Outcome {
+    /// 按 Linux 原始返回约定写回结果，然后恢复用户执行。
+    Return(isize),
+    /// 结束当前任务，不写回返回值或推进 PC。
+    Exit(u8),
+}
+
+/// 分发两架构共用的 Linux 调用号，不访问用户内存。
+///
+/// 当前仅实现 `exit`（93）和 `exit_group`（94），取首参数的低八位作为
+/// 可观察退出码。任务尚无多线程，两者均结束当前任务。其他调用返回
+/// `-ENOSYS`（-38）；本层不修改现场，由执行循环决定是否正常完成调用。
+pub fn dispatch(call: SyscallRequest) -> Outcome {
+    match call.number {
+        93 | 94 => Outcome::Exit(call.args[0] as u8),
+        _ => Outcome::Return(-38),
+    }
 }
 
 #[cfg(feature = "ktest")]

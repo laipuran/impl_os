@@ -159,7 +159,7 @@ fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 }
 
-/// 测试异常解码、嵌套内核 break/refill、用户态现场切换与 Linux syscall ABI。
+/// 测试异常解码、嵌套内核 break/refill、用户态现场切换、syscall ABI 与任务运行。
 ///
 /// 临时低地址 DMW1 别名允许 PLV3 访问物理 RAM。它映射所有 RAM，
 /// 不提供隔离，仅用于此受控内核测试代码；
@@ -308,6 +308,9 @@ pub fn kernel_test() {
     unsafe {
         crate::syscall::tests::kernel_test(user_address(crate::syscall::tests::entry()), stack)
     };
+    // SAFETY: 在恢复 DMW1 前执行全部可信任务探针；低地址用户代码与私有栈
+    // 仍有效，各任务同步返回后才复用该栈，中断保持关闭。
+    unsafe { crate::task::tests::kernel_test(user_address(crate::task::tests::entry()), stack) };
 
     // SAFETY: 所有用户执行均已返回高地址内核映射；
     // 恢复 DMW1，在正常启动前移除 feature 专用用户映射。

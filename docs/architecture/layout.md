@@ -29,6 +29,12 @@ os/src/
       mod.rs
       riscv64.S
       loongarch64.S
+  task.rs
+  task/
+    tests/
+      mod.rs
+      riscv64.S
+      loongarch64.S
   ktest/
     mod.rs
   utils.rs
@@ -77,9 +83,11 @@ os/src/
 | `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
 | `mm/mod.rs`、`mm/heap/mod.rs` | 内存管理初始化入口、固定 1 MiB 静态 buddy 堆及全局分配器 |
 | `mm/heap/tests/mod.rs` | 全局堆集合测试，以及独立内存池上的对齐、回收、耗尽和伙伴合并检查 |
-| `syscall.rs` | 共享 Linux syscall ABI 解码与正常返回处理；不负责分发或用户内存访问 |
+| `syscall.rs` | 共享 Linux syscall ABI 解码、正常返回处理及最小调用分发；不访问用户内存 |
 | `arch/*/syscall.rs` | 调用号、参数和返回值的寄存器位置，以及用户 syscall 来源判断 |
 | `syscall/tests/` | 连续用户 syscall 探针及共享行为断言，在 trap 自检提供的可信用户执行环境中运行 |
+| `task.rs` | 独占用户整数现场与生命周期，同步执行至退出或未处理的用户陷阱；不拥有地址空间或独立内核栈 |
+| `task/tests/` | 未知 syscall 恢复、退出和用户故障的真实任务探针，复用 trap 自检的可信执行环境 |
 | `ktest/mod.rs` | 仅在 `ktest` 构建中声明具名测试组列表，按顺序执行并在全部完成后输出总成功标记 |
 | `arch/*/trap/mod.rs`、`entry.S`、`return.S` | 私有整数现场、受控访问接口及 CSR 初始化；`entry.S` 保存异常现场并进入处理函数，`return.S` 恢复现场并负责用户态进入与返回；偏移由 Rust 字段布局和寄存器字长提供 |
 | `arch/*/trap/cause.rs` | 架构相关的中断/异常解码，使用 `thiserror` 在枚举变体上声明显示描述，保留未知原因，不决定处理策略 |

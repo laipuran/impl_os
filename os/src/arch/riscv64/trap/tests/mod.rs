@@ -151,7 +151,7 @@ fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usi
     assert_kernel_environment();
 }
 
-/// 测试异常解码、嵌套 S-mode ebreak、用户态现场切换与 Linux syscall ABI。
+/// 测试异常解码、嵌套 S-mode ebreak、用户态现场切换、syscall ABI 与任务运行。
 ///
 /// 用户探针要求 SBI PMP 在 bare mode 下允许访问 RAM。它们不映射内存，
 /// 也不提供隔离，仅执行这些固定且可信的代码片段。
@@ -226,5 +226,8 @@ pub fn kernel_test() {
     // SAFETY: 与已有用户探针相同，入口与独占栈位于 PMP 允许访问的 RAM；
     // 中断关闭，固定 syscall 探针不访问内核数据，不提供隔离。
     unsafe { crate::syscall::tests::kernel_test(crate::syscall::tests::entry(), stack) };
+    // SAFETY: 固定任务探针继续使用相同的可信用户执行环境及独占栈；
+    // 各任务同步返回后才复用该栈，中断始终关闭。
+    unsafe { crate::task::tests::kernel_test(crate::task::tests::entry(), stack) };
     crate::println!("riscv64: trap kernel tests passed");
 }

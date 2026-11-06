@@ -4,6 +4,6 @@
 
 当前执行流程为 BSS 清零、日志、trap 与内核堆初始化、启动输出、调用架构停机入口。`src/trap.rs` 定义共享内核异常策略；启用 `ktest` 时，由 `src/ktest/mod.rs` 的统一入口按具名测试组列表执行各模块自检，目前覆盖内核异常、用户态往返和堆分配。测试代码放在所属模块的 `tests/` 子目录；基础能力的初始化不依赖自检。接口约束及未实现的内存隔离见 `docs/architecture/boot.md`。
 
-`src/syscall.rs` 实现共享 Linux syscall ABI，架构寄存器约定位于 `src/arch/*/syscall.rs`。`ktest` 还覆盖连续用户 syscall 的参数、返回值和恢复 PC；当前没有任务执行循环、调用分发或具体 syscall。
+`src/syscall.rs` 实现共享 Linux syscall ABI 和最小调用分发，架构寄存器约定位于 `src/arch/*/syscall.rs`。`src/task.rs` 的任务独占整数现场，沿用 `run_user` 同步执行到退出或未处理的用户陷阱；`exit/exit_group` 保存低八位退出码，其他调用返回 `-ENOSYS`。`ktest` 在可信用户映射中验证完整执行循环。当前没有 ELF 装载器、用户地址空间或调度器，正常启动不创建用户任务。
 
 在仓库根执行 `make all`，不在这里维护第二套 Makefile。依赖、模块边界和物理/虚拟地址约定见 `docs/architecture/`。

@@ -12,6 +12,7 @@ mod ktest;
 mod lang_items;
 mod mm;
 mod syscall;
+mod task;
 mod trap;
 mod utils;
 
