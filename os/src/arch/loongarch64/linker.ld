@@ -9,6 +9,7 @@ PHDRS {
 
 SECTIONS {
     . = 0x9000000090000000;
+    skernel = .;
     .text : AT(ADDR(.text) - 0x9000000000000000) {
         KEEP(*(.text.entry))
         *(.text .text.*)
@@ -29,5 +30,6 @@ SECTIONS {
         *(COMMON)
         ebss = .;
     } :data
+    ekernel = .;
     /DISCARD/ : { *(.eh_frame .eh_frame_hdr) }
 }

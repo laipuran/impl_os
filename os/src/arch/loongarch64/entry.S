@@ -22,6 +22,9 @@ _start:
     la.local $sp, boot_stack_top
     # 未安装 TLS；异常初始化保留此内核 ABI 的 tp。
     move $tp, $zero
+    # QEMU direct boot 的 a2 是 system table 物理地址，不是 FDT 地址。
+    # 共享入口只接收一个架构启动参数；启动信息由 arch::boot 解释。
+    move $a0, $a2
     b kernel_main
 .Lpark:
     idle 0
