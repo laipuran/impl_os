@@ -18,6 +18,14 @@ os/src/
   trap.rs
   mm/
     mod.rs
+    fdt.rs
+    fdt/
+      tests/
+        mod.rs
+    regions.rs
+    regions/
+      tests/
+        mod.rs
     heap/
       mod.rs
       tests/
@@ -28,6 +36,7 @@ os/src/
     mod.rs
     riscv64/
       mod.rs
+      boot.rs
       entry.S
       trap/
         mod.rs
@@ -40,6 +49,11 @@ os/src/
       linker.ld
     loongarch64/
       mod.rs
+      boot.rs
+      boot/
+        tables.rs
+        tests/
+          mod.rs
       entry.S
       trap/
         mod.rs
@@ -56,12 +70,16 @@ os/src/
 | --- | --- |
 | `main.rs` | Rust 入口、BSS 清零、日志、trap 及内存管理初始化、启动输出 |
 | `console.rs` | 通过 `core::fmt::Write` 格式化文本，逐字节调用架构串口输出 |
-| `arch/mod.rs` | 按编译目标导出平台操作及 `trap` 接口 |
+| `arch/mod.rs` | 按编译目标导出平台操作、启动信息和异常处理接口 |
 | `arch/*/entry.S` | CPU 初始设置、停放非启动 CPU、设置 64 KiB 启动栈、进入 Rust |
 | `arch/*/linker.ld` | ELF 入口、代码/数据加载段、启动栈和 BSS 边界 |
 | `arch/*/mod.rs` | 嵌入入口汇编、访问平台 UART、提供停机操作 |
+| `arch/*/boot.rs` | 解释平台启动参数，读取 FDT 和平台保留区，将内核链接边界转换为物理区间 |
+| `arch/loongarch64/boot/tables.rs` | 按 GUID 解析 QEMU 直接加载 ELF 时提供的系统配置表 |
 | `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
-| `mm/mod.rs`、`mm/heap/mod.rs` | 内存管理初始化入口、固定 1 MiB 静态 buddy 堆及全局分配器 |
+| `mm/mod.rs` | 初始化内核堆，结合平台启动信息建立物理内存地图 |
+| `mm/heap/mod.rs` | 固定 1 MiB 静态 buddy 堆及全局分配器 |
+| `mm/fdt.rs`、`mm/regions.rs` | 共用的 FDT 启动内存解析和物理区间运算，合并 RAM/保留区并计算可用完整页 |
 | `mm/heap/tests/mod.rs` | 全局堆集合测试，以及独立内存池上的对齐、回收、耗尽和伙伴合并检查 |
 | `ktest/mod.rs` | 仅在 `ktest` 构建中声明具名测试组列表，按顺序执行并在全部完成后输出总成功标记 |
 | `arch/*/trap/mod.rs`、`entry.S`、`return.S` | 私有整数现场、受控访问接口及 CSR 初始化；`entry.S` 保存异常现场并进入处理函数，`return.S` 恢复现场并负责用户态进入与返回；偏移由 Rust 字段布局和寄存器字长提供 |
@@ -75,8 +93,10 @@ _start → kernel_main → clear_bss
                     → utils::logging::init
                     → trap::init → arch::trap::init
                     → mm::init → heap::init
+                    → mm::discover → arch::boot::memory / kernel_region
+                                   → fdt / regions → 物理内存地图
                     → console → arch::putchar
-                    → ktest::run → SUITES → trap、heap 测试组（仅 ktest）
+                    → ktest::run → SUITES → 各模块自检（仅 ktest）
                     → arch::shutdown
 panic → console → arch::halt
 Box / Vec → 全局 LockedHeap → 静态堆空间
