@@ -159,13 +159,20 @@ fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 }
 
-/// 测试嵌套内核 break/refill trap 及六次用户异常往返。
+/// 测试异常解码、嵌套内核 break/refill、用户态现场切换与 Linux syscall ABI。
 ///
 /// 临时低地址 DMW1 别名允许 PLV3 访问物理 RAM。它映射所有 RAM，
 /// 不提供隔离，仅用于此受控内核测试代码；
 /// 函数报告成功前会恢复原始 DMW1。
 pub fn kernel_test() {
     decode_test();
+    let mut kernel_call = TrapContext::user(0x1000, 0x2000);
+    kernel_call.estat = 11 << 16;
+    kernel_call.prmd = 0; // PLV0 syscall 与用户 syscall 使用相同 Ecode。
+    crate::syscall::tests::assert_rejected(&mut kernel_call);
+    kernel_call.estat |= REFILL;
+    kernel_call.prmd = 3; // refill 标记必须优先于残留的 syscall Ecode。
+    crate::syscall::tests::assert_rejected(&mut kernel_call);
     KERNEL_TP.store(kernel_tp(), Ordering::Relaxed);
     NESTED_COUNT.store(0, Ordering::Relaxed);
     REFILL_COUNT.store(0, Ordering::Relaxed);
@@ -296,6 +303,11 @@ pub fn kernel_test() {
     // 仍使用同一独占 context 及有效用户栈。
     unsafe { run_user(&mut context) };
     assert_user(&context, first, ExceptionCause::SystemCall, &second_regs);
+    // SAFETY: DMW1 仍提供固定探针与独占栈的 PLV3 别名；中断关闭，
+    // 探针只操作寄存器并返回 trap，不访问暂停的内核状态。
+    unsafe {
+        crate::syscall::tests::kernel_test(user_address(crate::syscall::tests::entry()), stack)
+    };
 
     // SAFETY: 所有用户执行均已返回高地址内核映射；
     // 恢复 DMW1，在正常启动前移除 feature 专用用户映射。

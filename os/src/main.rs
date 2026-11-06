@@ -11,6 +11,7 @@ mod console;
 mod ktest;
 mod lang_items;
 mod mm;
+mod syscall;
 mod trap;
 mod utils;
 

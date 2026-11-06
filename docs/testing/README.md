@@ -8,7 +8,7 @@
 | 容器内 `just build` / `make all` | 两架构 ELF 构建与导出 | 启动及运行时语义 |
 | 宿主 `just judge-build` | 原始比赛镜像断网，过滤隐藏文件和目录，以空 Cargo 缓存及独立构建目录构建双架构 ELF | 启动、评分 |
 | 容器内 `just run rv` / `just run la` | 手动观察启动日志和进程退出 | 官方用户程序的正确性 |
-| 容器内 `just test [rv\|la] [release\|debug]` | 构建启用 `ktest` 的 ELF 并执行全部已接入内核自检；目前覆盖 trap 和 heap | 未实现的测试功能、官方用户程序 |
+| 容器内 `just test [rv\|la] [release\|debug]` | 构建启用 `ktest` 的 ELF 并执行全部已接入内核自检；目前覆盖 trap、heap 和 syscall ABI | 未实现的测试功能、官方用户程序 |
 
 当前有统一的启动期内核自检入口，通过静态具名测试组列表组织各模块测试，没有自动注册、名称筛选或官方测试集运行入口。格式和构建检查不能替代运行时功能测试。
 
@@ -27,9 +27,9 @@ RISC-V 正常启动应输出日志后退出 QEMU。LoongArch 的持续运行是�
 
 命令格式为 `just test [架构] [构建模式]`，默认架构 `rv`、模式 `release`。该命令统一启用 Cargo feature `ktest`，经现有 Make 构建入口导出 ELF，再调用 QEMU；`MEM`、`SMP` 环境变量与 `just run` 一致。一次运行执行所选架构的全部已接入测试；验证双架构时分别运行两个 QEMU 实例。
 
-`ktest` 只控制测试代码，不控制 trap 等正式能力。共享入口先正常初始化内核，再调用 `os/src/ktest/mod.rs` 中的 `run()`；默认构建不编译该模块和各架构的 trap 测试探针。这里使用 `#[cfg(feature = "ktest")]`，不是 Rust 的 `#[cfg(test)]` 或自定义 `#[cfg(ktest)]`，也不依赖 Cargo 测试 harness。
+`ktest` 只控制测试代码，不控制 trap、syscall ABI 或内核堆等正式能力。共享入口先正常初始化内核，再调用 `os/src/ktest/mod.rs` 中的 `run()`；默认构建不编译测试入口、模块自检或汇编探针。这里使用 `#[cfg(feature = "ktest")]`，不是 Rust 的 `#[cfg(test)]` 或自定义 `#[cfg(ktest)]`，也不依赖 Cargo 测试 harness。
 
-新增自检时，将测试代码放在所属模块的 `tests/` 子目录，由父模块用同一个 `ktest` feature 控制；仅供自检使用的汇编也放在该子目录。然后在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 是无参数、无返回值的测试组函数。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
+自检代码放在所属模块的 `tests/` 子目录，由父模块用同一个 `ktest` feature 控制；仅供自检使用的汇编也放在该子目录。新增独立测试组时，在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 是无参数、无返回值的测试组函数。依赖已有测试组受控执行环境的辅助测试由该组调用，不单独注册；syscall ABI 测试的接入见下文。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
 
 测试在启动 CPU 上关闭中断、依次执行，每组测试返回前必须恢复临时映射、机器状态并释放测试资源。失败直接走现有 panic 停机，不捕获后继续执行；故意触发致命异常或无法恢复状态的测试应在独立 QEMU 实例中验证，不加入这条顺序执行路径。
 
@@ -68,6 +68,17 @@ LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小�
 布局和耗尽检查使用单独的、按 8 KiB 对齐的 8 KiB 静态内存池，不耗尽全局堆。测试检查不同大小与对齐的分配互不覆盖、写入数据保持、满堆返回失败、释放后的块复用，以及两个 4 KiB 伙伴块释放后能够满足 8 KiB 申请。全部通过后输出 `<架构>: heap kernel tests passed`，最后仍以统一入口的总成功标记为准。
 
 独立堆耗尽检查不触发全局分配失败处理；实际不可恢复的分配失败会 panic 停机，必须在独立 QEMU 实例中验证，不能加入顺序自检。
+
+## Syscall ABI 内核测试
+
+同一组 `just test` 命令也验证 Linux syscall ABI。测试位于 `os/src/syscall/tests/`，由 trap 自检在其受控用户执行环境中调用：RISC-V 使用 bare 模式，依赖固件 PMP 允许访问探针与栈；LoongArch 使用临时 PLV3 低地址 DMW1 别名，并在返回统一测试入口前由 trap 自检恢复。两者均不提供用户隔离，也不注册依赖另一套件遗留状态的独立套件。
+
+- 固定用户探针连续执行三次 syscall，检查调用号和全部六个参数，包含高 32 位非零、最高位为一及负数的原始机器字。
+- 正常返回仅修改 a0 和 PC，保留其余整数寄存器及异常元数据；用户将超过 32 位的成功值和负 errno 复制到下一次调用参数，验证实际可见结果和四字节 PC 推进，最后到达指定 breakpoint。
+- 非 syscall 的 breakpoint、内核 syscall，以及 LoongArch 带残留 syscall Ecode 的 refill 均被拒绝，且现场不变。内核 syscall 和残留 Ecode 场景使用构造的现场检查，不实际触发致命内核异常。
+- 在已捕获的用户 syscall 现场上构造 PC 边界：可表示的四字节推进成功，溢出时拒绝完成并保持 PC、整数寄存器及异常信息不变；不实际执行边界地址。
+
+成功时额外输出 `<架构>: syscall ABI tests passed`，全部套件完成仍以总成功标记为准。
 
 ## 启用自检时的静态检查
 

@@ -2,6 +2,7 @@ use core::arch::{asm, global_asm};
 
 global_asm!(include_str!("entry.S"));
 
+pub(crate) mod syscall;
 pub mod trap;
 
 pub const NAME: &str = "riscv64";

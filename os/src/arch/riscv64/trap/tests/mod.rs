@@ -151,12 +151,16 @@ fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usi
     assert_kernel_environment();
 }
 
-/// 测试解码、嵌套 S-mode ebreak 及四次真实 U-mode ABI 往返。
+/// 测试异常解码、嵌套 S-mode ebreak、用户态现场切换与 Linux syscall ABI。
 ///
 /// 用户探针要求 SBI PMP 在 bare mode 下允许访问 RAM。它们不映射内存，
 /// 也不提供隔离，仅执行这些固定且可信的代码片段。
 pub fn kernel_test() {
     assert_cause_decoding();
+    let mut kernel_call = TrapContext::user(0x1000, 0x2000);
+    kernel_call.scause = 9; // S-mode ecall 不是用户 syscall。
+    kernel_call.sstatus = 1 << 8;
+    crate::syscall::tests::assert_rejected(&mut kernel_call);
     assert_kernel_environment();
     // SAFETY: 汇编保存内核 ABI，加载哨兵寄存器值，
     // 并触发 handle_kernel_test 识别的精确内核测试 breakpoint。
@@ -219,5 +223,8 @@ pub fn kernel_test() {
     );
     assert_user_context(&context, 0x600, stack - 48, float, 2);
     assert!(context.bad_addr() == 0 || context.bad_addr() == 0x53);
+    // SAFETY: 与已有用户探针相同，入口与独占栈位于 PMP 允许访问的 RAM；
+    // 中断关闭，固定 syscall 探针不访问内核数据，不提供隔离。
+    unsafe { crate::syscall::tests::kernel_test(crate::syscall::tests::entry(), stack) };
     crate::println!("riscv64: trap kernel tests passed");
 }
