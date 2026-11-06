@@ -1,0 +1,117 @@
+//! 物理内存区间的校验、保留区扣除和页对齐，不访问区间中的内存。
+
+use alloc::vec::Vec;
+
+/// 以字节为单位的半开物理地址区间。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Region {
+    /// 包含在区间内的物理起点。
+    pub start: usize,
+    /// 不包含在区间内的物理终点。
+    pub end: usize,
+}
+
+impl Region {
+    /// 从物理起点和非零长度构造区间，拒绝地址溢出。
+    pub fn new(start: usize, size: usize) -> Result<Self, &'static str> {
+        let end = start.checked_add(size).ok_or("physical range overflow")?;
+        if start == end {
+            return Err("empty physical range");
+        }
+        Ok(Self { start, end })
+    }
+}
+
+/// 已排序、合并的 RAM、保留区和页对齐可用区间。
+#[derive(Debug)]
+pub struct MemoryMap {
+    /// 平台报告的全部 RAM。
+    pub ram: Vec<Region>,
+    /// 不允许分配的物理区间，可以包含 RAM 之外的区域。
+    pub reserved: Vec<Region>,
+    /// 扣除保留区后可以分配的完整页。
+    pub usable: Vec<Region>,
+}
+
+impl MemoryMap {
+    /// 扣除保留区后向内按页对齐；不保留不完整的页。
+    ///
+    /// 拒绝无效区间、非二次幂页大小及没有完整可用页的内存地图。
+    pub fn new(
+        mut ram: Vec<Region>,
+        mut reserved: Vec<Region>,
+        page_size: usize,
+    ) -> Result<Self, &'static str> {
+        if !page_size.is_power_of_two() {
+            return Err("invalid page size");
+        }
+        normalize(&mut ram)?;
+        normalize(&mut reserved)?;
+        if ram.is_empty() {
+            return Err("no RAM described");
+        }
+        let mut usable = Vec::new();
+        for region in &ram {
+            let mut cursor = region.start;
+            for exclusion in &reserved {
+                if exclusion.end <= cursor {
+                    continue;
+                }
+                if exclusion.start >= region.end {
+                    break;
+                }
+                if exclusion.start > cursor {
+                    push_aligned(&mut usable, cursor, exclusion.start, page_size);
+                }
+                cursor = cursor.max(exclusion.end).min(region.end);
+                if cursor == region.end {
+                    break;
+                }
+            }
+            push_aligned(&mut usable, cursor, region.end, page_size);
+        }
+        if usable.is_empty() {
+            return Err("no complete usable pages");
+        }
+        Ok(Self {
+            ram,
+            reserved,
+            usable,
+        })
+    }
+}
+
+fn normalize(regions: &mut Vec<Region>) -> Result<(), &'static str> {
+    if regions.iter().any(|region| region.start >= region.end) {
+        return Err("invalid physical range");
+    }
+    regions.sort_unstable_by_key(|region| region.start);
+    let mut length = 0;
+    for index in 0..regions.len() {
+        let region = regions[index];
+        if length > 0 && regions[length - 1].end >= region.start {
+            regions[length - 1].end = regions[length - 1].end.max(region.end);
+        } else {
+            regions[length] = region;
+            length += 1;
+        }
+    }
+    regions.truncate(length);
+    Ok(())
+}
+
+fn push_aligned(output: &mut Vec<Region>, start: usize, end: usize, page_size: usize) {
+    // 最后一个不完整页的向上对齐可能溢出，此时没有可保留的完整页。
+    let Some(start) = start.checked_add(page_size - 1) else {
+        return;
+    };
+    let start = start & !(page_size - 1);
+    let end = end & !(page_size - 1);
+    if start < end {
+        output.push(Region { start, end });
+    }
+}
+
+#[cfg(any(test, feature = "ktest"))]
+#[path = "regions/tests/mod.rs"]
+pub mod tests;

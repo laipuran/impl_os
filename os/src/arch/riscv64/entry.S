@@ -11,6 +11,8 @@ _start:
     # 内核 ABI 不使用 TLS；异常入口恢复此固定的内核 tp。
     li tp, 0
     la sp, boot_stack_top
+    # 共享入口只接收一个架构启动参数：RV 将 FDT 物理地址放入 a0。
+    mv a0, a1
     tail kernel_main
 .Lpark:
     wfi
