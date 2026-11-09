@@ -9,6 +9,7 @@ PHDRS {
 
 SECTIONS {
     . = 0x80200000;
+    skernel = .;
     .text : ALIGN(4K) {
         KEEP(*(.text.entry))
         *(.text .text.*)
@@ -27,5 +28,6 @@ SECTIONS {
         *(COMMON)
         ebss = .;
     } :data
+    ekernel = .;
     /DISCARD/ : { *(.eh_frame .eh_frame_hdr) }
 }

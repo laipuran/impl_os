@@ -15,6 +15,19 @@ const SUITES: &[Suite] = &[
         name: "heap",
         run: crate::mm::heap::tests::kernel_test,
     },
+    Suite {
+        name: "physical regions",
+        run: crate::mm::regions::tests::kernel_test,
+    },
+    Suite {
+        name: "FDT memory",
+        run: crate::mm::fdt::tests::kernel_test,
+    },
+    #[cfg(target_arch = "loongarch64")]
+    Suite {
+        name: "boot tables",
+        run: crate::arch::boot::tests::kernel_test,
+    },
 ];
 
 /// 正常初始化后，按声明顺序运行配置的测试套件。
