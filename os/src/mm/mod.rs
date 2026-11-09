@@ -1,18 +1,19 @@
-//! 内核堆及启动期物理内存地图。
+//! 内核堆、启动期物理内存地图及物理页框分配。
 
 pub(crate) mod fdt;
+pub(crate) mod frame;
 pub(crate) mod heap;
 pub(crate) mod regions;
 
-/// 依次初始化内核堆、发现物理内存，并返回内存地图。
+/// 依次初始化内核堆、发现物理内存，并返回管理可用页的分配器。
 ///
-/// 必须早于首次堆分配。返回的地图由调用者持有；启动数据不回收。
+/// 必须早于首次堆分配。返回的分配器由调用者持有；启动数据不回收。
 /// 初始化失败后不支持重试，因为内核堆已经初始化。
-/// 没有完整可用页时返回的地图仍有效，其可用区间列表为空。
+/// 没有完整可用页时返回空分配器，由后续分配请求报告资源不足。
 ///
 /// # Errors
 ///
-/// 启动内存描述无效或不受支持时返回错误。
+/// 启动内存描述无效或不受支持，或堆无法容纳页框位图时返回错误。
 ///
 /// # Panics
 ///
@@ -22,11 +23,21 @@ pub(crate) mod regions;
 ///
 /// 仅在关闭中断的 boot CPU 上调用，不支持并发或中断重入。
 /// `boot_arg` 必须是架构入口整理的平台启动参数；启动数据必须完整、可读且
-/// 在发现期间不变，并已建立该架构要求的启动内存访问方式。
-pub unsafe fn init(boot_arg: usize) -> Result<regions::MemoryMap, &'static str> {
+/// 在发现期间不变，并已建立该架构要求的启动内存访问方式。调用者必须独占
+/// 扣除已知启动占用后的 RAM，且不能在返回的分配器存活期间通过其他途径复用它。
+pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static str> {
     heap::init();
     // SAFETY: 调用者保证平台参数、启动数据及架构访问方式有效。
-    unsafe { discover(boot_arg) }
+    let map = unsafe { discover(boot_arg) }?;
+    // SAFETY: discover 已扣除内核及全部已知启动占用；调用者保证独占其余 RAM，
+    // 并在分配器存活期间不通过其他途径复用这些页。
+    let frames = unsafe { frame::FrameAllocator::new(map) }?;
+    log::info!(
+        "physical frames: total={}, available={}",
+        frames.total(),
+        frames.available()
+    );
+    Ok(frames)
 }
 
 /// 通过架构启动信息读取内存布局，并扣除所有已知启动占用。
@@ -53,7 +64,7 @@ unsafe fn discover(boot_arg: usize) -> Result<regions::MemoryMap, &'static str> 
     let mut memory = unsafe { boot::memory(boot_arg) }?;
     let kernel = boot::kernel_region()?;
     memory.reserved.push(kernel);
-    let map = MemoryMap::new(memory.ram, memory.reserved, 4096)?;
+    let map = MemoryMap::new(memory.ram, memory.reserved, frame::PAGE_SIZE)?;
     assert!(
         map.ram()
             .iter()

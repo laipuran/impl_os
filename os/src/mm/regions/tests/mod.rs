@@ -35,6 +35,8 @@ fn merge_and_subtract() {
         map.usable(),
         &[region(0, 8), region(24, 40), region(44, 60), region(88, 96)]
     );
+    let usable = map.usable().to_vec();
+    assert_eq!(map.into_usable(), usable);
 }
 
 #[cfg_attr(test, test)]
@@ -61,6 +63,7 @@ fn empty_usable_is_valid() {
         assert_eq!(map.ram(), ram);
         assert_eq!(map.reserved(), reserved);
         assert!(map.usable().is_empty());
+        assert!(map.into_usable().is_empty());
     }
 }
 

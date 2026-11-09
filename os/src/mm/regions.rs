@@ -48,6 +48,11 @@ impl MemoryMap {
         &self.usable
     }
 
+    /// 消耗内存地图，移交与 [`Self::usable`] 相同的可用区间。
+    pub fn into_usable(self) -> Vec<Region> {
+        self.usable
+    }
+
     /// 扣除保留区后向内按页对齐；不保留不完整的页。
     ///
     /// 没有完整可用页时，地图仍有效，[`Self::usable`] 返回空切片。

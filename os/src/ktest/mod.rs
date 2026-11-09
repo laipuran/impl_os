@@ -1,44 +1,51 @@
 //! 启动期内核测试，仅在启用 `ktest` feature 时编译。
 
+use crate::mm::frame::FrameAllocator;
+
 struct Suite {
     name: &'static str,
-    run: fn(),
+    run: fn(&FrameAllocator),
 }
 
 // 将测试套件选择与运行器及正常启动路径分离。
 const SUITES: &[Suite] = &[
     Suite {
         name: "trap",
-        run: crate::arch::trap::tests::kernel_test,
+        run: |_| crate::arch::trap::tests::kernel_test(),
     },
     Suite {
         name: "heap",
-        run: crate::mm::heap::tests::kernel_test,
+        run: |_| crate::mm::heap::tests::kernel_test(),
     },
     Suite {
         name: "physical regions",
-        run: crate::mm::regions::tests::kernel_test,
+        run: |_| crate::mm::regions::tests::kernel_test(),
+    },
+    Suite {
+        name: "physical frames",
+        run: crate::mm::frame::tests::kernel_test,
     },
     Suite {
         name: "FDT memory",
-        run: crate::mm::fdt::tests::kernel_test,
+        run: |_| crate::mm::fdt::tests::kernel_test(),
     },
     #[cfg(target_arch = "loongarch64")]
     Suite {
         name: "boot tables",
-        run: crate::arch::boot::tests::kernel_test,
+        run: |_| crate::arch::boot::tests::kernel_test(),
     },
 ];
 
 /// 正常初始化后，按声明顺序运行配置的测试套件。
 ///
+/// `frames` 是正常启动流程初始化的页框分配器，供测试借用，不重复初始化。
 /// 在禁用中断的 boot CPU 上调用。各套件必须在返回前恢复临时映射和机器状态；
 /// 断言失败会通过内核 panic handler 停机，
 /// 因此不会打印最终成功标记。
-pub fn run() {
+pub fn run(frames: &FrameAllocator) {
     for suite in SUITES {
         crate::println!("{}: running {} tests", crate::arch::NAME, suite.name);
-        (suite.run)();
+        (suite.run)(frames);
     }
     crate::println!("{}: all kernel tests passed", crate::arch::NAME);
 }
