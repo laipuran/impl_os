@@ -46,9 +46,9 @@ impl NodeKind {
 pub(super) struct Properties<'a> {
     pub cells: Cells,
     pub enabled: bool,
-    memory: bool,
+    is_memory_node: bool,
     reg: Option<&'a [u8]>,
-    dynamic_size: bool,
+    has_size_property: bool,
     ranges: Option<&'a [u8]>,
     initrd_start: Option<u64>,
     initrd_end: Option<u64>,
@@ -59,9 +59,9 @@ impl<'a> Properties<'a> {
         Self {
             cells: Cells::default(),
             enabled,
-            memory: false,
+            is_memory_node: false,
             reg: None,
-            dynamic_size: false,
+            has_size_property: false,
             ranges: None,
             initrd_start: None,
             initrd_end: None,
@@ -72,13 +72,13 @@ impl<'a> Properties<'a> {
         match name {
             b"#address-cells" => self.cells.address = cell_count(value)?,
             b"#size-cells" => self.cells.size = cell_count(value)?,
-            b"device_type" => self.memory = string_value(value)? == b"memory",
+            b"device_type" => self.is_memory_node = string_value(value)? == b"memory",
             b"status" => {
                 let status = string_value(value)?;
                 self.enabled &= status == b"okay" || status == b"ok";
             }
             b"reg" => self.reg = Some(value),
-            b"size" => self.dynamic_size = true,
+            b"size" => self.has_size_property = true,
             b"ranges" => self.ranges = Some(value),
             b"linux,initrd-start" => self.initrd_start = Some(cell_value(value)?),
             b"linux,initrd-end" => self.initrd_end = Some(cell_value(value)?),
@@ -97,10 +97,12 @@ impl<'a> Properties<'a> {
         if !self.enabled {
             return Ok(());
         }
+
         if kind == NodeKind::Chosen {
             self.collect_initrd(&mut output.reserved)?;
         }
-        if self.memory {
+
+        if self.is_memory_node {
             if depth != 1 || kind != NodeKind::Other {
                 return Err("unsupported FDT memory node location");
             }
@@ -110,11 +112,13 @@ impl<'a> Properties<'a> {
                 &mut output.ram,
             )?;
         }
+
         if kind == NodeKind::ReservedMemory
             && (self.ranges.is_none_or(|ranges| !ranges.is_empty()) || self.cells != parent_cells)
         {
             return Err("unsupported reserved-memory addressing");
         }
+
         if kind == NodeKind::ReservedRegion {
             self.collect_reserved(parent_cells, &mut output.reserved)?;
         }
@@ -139,7 +143,7 @@ impl<'a> Properties<'a> {
     ) -> Result<(), &'static str> {
         if let Some(reg) = self.reg {
             decode_regions(reg, cells, reserved)
-        } else if self.dynamic_size {
+        } else if self.has_size_property {
             Err("dynamic reserved-memory allocation is unsupported")
         } else {
             Err("reserved-memory child without reg or size")

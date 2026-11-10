@@ -13,7 +13,7 @@ pub(crate) mod regions;
 ///
 /// # Errors
 ///
-/// 启动内存描述无效或不受支持，或堆无法容纳页框位图时返回错误。
+/// 启动内存描述无效或不受支持，或堆无法容纳页框位图及索引时返回错误。
 ///
 /// # Panics
 ///
@@ -23,54 +23,51 @@ pub(crate) mod regions;
 ///
 /// 仅在关闭中断的 boot CPU 上调用，不支持并发或中断重入。
 /// `boot_arg` 必须是架构入口整理的平台启动参数；启动数据必须完整、可读且
-/// 在发现期间不变，并已建立该架构要求的启动内存访问方式。调用者必须独占
-/// 扣除已知启动占用后的 RAM，且不能在返回的分配器存活期间通过其他途径复用它。
+/// 在发现期间不变，并已建立该架构要求的启动内存访问方式。
 pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static str> {
     heap::init();
+
     // SAFETY: 调用者保证平台参数、启动数据及架构访问方式有效。
-    let map = unsafe { discover(boot_arg) }?;
-    // SAFETY: discover 已扣除内核及全部已知启动占用；调用者保证独占其余 RAM，
-    // 并在分配器存活期间不通过其他途径复用这些页。
-    let frames = unsafe { frame::FrameAllocator::new(map) }?;
+    let memory = unsafe { crate::arch::boot::memory(boot_arg) }?;
+    let map = discover(memory)?;
+
+    let frames = frame::FrameAllocator::new(map)?;
+
     log::info!(
         "physical frames: total={}, available={}",
         frames.total(),
         frames.available()
     );
+
     Ok(frames)
 }
 
-/// 通过架构启动信息读取内存布局，并扣除所有已知启动占用。
+/// 整理平台已解析的内存描述，并扣除内核占用。
 ///
-/// 必须在堆初始化后调用；设备树本身保留到关机，不回收启动数据。
+/// 不访问原始启动存储；平台层已在输入中保留 FDT 本体和其他启动数据。
 ///
 /// # Errors
 ///
-/// 设备树无效、包含不支持的内存描述，或未描述 RAM 时返回错误。
+/// 物理区间或内核链接边界无效，或未描述 RAM 时返回错误。
 ///
 /// # Panics
 ///
 /// 内核物理地址区间未完整包含在描述的 RAM 中时 panic。
-///
-/// # Safety
-///
-/// `boot_arg` 必须是架构入口整理的平台启动参数；对应启动数据必须完整、
-/// 可读且不变，并已建立该架构要求的启动内存访问方式。
-unsafe fn discover(boot_arg: usize) -> Result<regions::MemoryMap, &'static str> {
+fn discover(mut memory: fdt::BootMemory) -> Result<regions::MemoryMap, &'static str> {
     use crate::arch::boot;
     use regions::MemoryMap;
 
-    // SAFETY: 调用者保证参数来源、启动数据有效期及架构访问方式。
-    let mut memory = unsafe { boot::memory(boot_arg) }?;
     let kernel = boot::kernel_region()?;
     memory.reserved.push(kernel);
     let map = MemoryMap::new(memory.ram, memory.reserved, frame::PAGE_SIZE)?;
+
     assert!(
         map.ram()
             .iter()
             .any(|ram| ram.start <= kernel.start && kernel.end <= ram.end),
         "kernel outside described RAM"
     );
+
     for region in map.ram() {
         log::info!("RAM: [{:#x}, {:#x})", region.start, region.end);
     }

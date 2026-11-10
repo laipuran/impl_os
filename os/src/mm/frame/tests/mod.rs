@@ -7,9 +7,7 @@ use crate::mm::regions::{MemoryMap, Region};
 
 fn allocator(ram: Vec<Region>, reserved: Vec<Region>) -> FrameAllocator {
     let map = MemoryMap::new(ram, reserved, PAGE_SIZE).unwrap();
-    // SAFETY: 该分配器仅用于独立的合成地址记账；测试不访问物理内存，
-    // 不将句柄交给真实内存使用者，因而不与实际 RAM 所有者发生访问冲突。
-    unsafe { FrameAllocator::new(map) }.unwrap()
+    FrameAllocator::new(map).unwrap()
 }
 
 fn region(start_page: usize, end_page: usize) -> Region {
@@ -23,11 +21,18 @@ fn disjoint_regions_and_recycling() {
     let frames = allocator(vec![region(0, 4), region(100, 103)], vec![region(1, 3)]);
     assert_eq!(frames.total(), 5);
     let mut allocated = Vec::new();
-    for page in [0, 3, 100, 101, 102] {
-        let frame = frames.alloc().unwrap();
-        assert_eq!(frame.start_address(), page * PAGE_SIZE);
-        allocated.push(frame);
+    for _ in 0..frames.total() {
+        allocated.push(frames.alloc().unwrap());
     }
+    let mut addresses: Vec<_> = allocated
+        .iter()
+        .map(|frame| frame.start_address())
+        .collect();
+    addresses.sort_unstable();
+    assert_eq!(
+        addresses,
+        [0, 3, 100, 101, 102].map(|page| page * PAGE_SIZE)
+    );
     assert_eq!(frames.available(), 0);
     assert!(frames.alloc().is_none());
     let released = allocated.swap_remove(2);
@@ -129,8 +134,7 @@ fn invalid_maps() {
     for ram in invalid {
         // 用一字节页构造合法地图，覆盖与分配器页大小不兼容的情况。
         let map = MemoryMap::new(ram, vec![], 1).unwrap();
-        // SAFETY: 仅检查合成区间的校验和元数据分配失败，不访问任何物理地址。
-        assert!(unsafe { FrameAllocator::new(map) }.is_err());
+        assert!(FrameAllocator::new(map).is_err());
     }
 }
 
@@ -160,5 +164,6 @@ pub fn kernel_test(frames: &FrameAllocator) {
     empty_usable();
     exhaustive_reservations();
     invalid_maps();
+    super::bitmap::tests::kernel_test();
     crate::println!("{}: physical frame kernel tests passed", crate::arch::NAME);
 }

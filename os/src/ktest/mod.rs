@@ -29,6 +29,10 @@ const SUITES: &[Suite] = &[
         name: "FDT memory",
         run: |_| crate::mm::fdt::tests::kernel_test(),
     },
+    Suite {
+        name: "boot FDT mapping",
+        run: |_| crate::arch::boot_data::tests::kernel_test(),
+    },
     #[cfg(target_arch = "loongarch64")]
     Suite {
         name: "boot tables",

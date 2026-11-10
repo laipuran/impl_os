@@ -1,4 +1,10 @@
 //! 校验 FDT 头、保留表及数据块布局，向树解析器提供已验证的切片。
+//!
+//! 依据 [Devicetree Specification v0.4 第 5 章]：§5.1 规定格式版本兼容，
+//! §5.2 定义大端头部字段，§5.3～5.6 定义数据块布局及对齐。
+//! 规范版本 v0.4 与其描述的 DTB 二进制格式版本 17 是不同的版本号。
+//!
+//! [Devicetree Specification v0.4 第 5 章]: https://github.com/devicetree-org/devicetree-specification/blob/v0.4/source/chapter5-flattened-format.rst
 
 use alloc::vec::Vec;
 
@@ -9,7 +15,8 @@ use super::{
 };
 
 pub(super) const MAGIC: u32 = 0xd00d_feed;
-pub(super) const HEADER_SIZE: usize = 40;
+/// DTB 二进制格式 v17 的固定头部长度，单位为字节。
+pub(crate) const HEADER_SIZE: usize = 40;
 const STRUCTURE_OFFSET_FIELD: usize = 8;
 const STRINGS_OFFSET_FIELD: usize = 12;
 const STRINGS_SIZE_FIELD: usize = 32;

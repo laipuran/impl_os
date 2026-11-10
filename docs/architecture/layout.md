@@ -17,8 +17,8 @@ os/src/
   lang_items.rs
   console.rs
   trap.rs
+  mm.rs
   mm/
-    mod.rs
     fdt/
       mod.rs
       header.rs
@@ -32,8 +32,10 @@ os/src/
         invalid.rs
     frame.rs
     frame/
+      bitmap.rs
       tests/
         mod.rs
+        bitmap.rs
     regions.rs
     regions/
       tests/
@@ -61,6 +63,10 @@ os/src/
     logging.rs
   arch/
     mod.rs
+    boot_data.rs
+    boot_data/
+      tests/
+        mod.rs
     riscv64/
       mod.rs
       boot.rs
@@ -106,16 +112,18 @@ os/src/
 | `arch/*/linker.ld` | ELF 入口、代码/数据加载段、启动栈和 BSS 边界 |
 | `arch/*/mod.rs` | 嵌入入口汇编、访问平台 UART、提供停机操作 |
 | `arch/*/boot.rs` | 解释平台启动参数，读取 FDT 和平台保留区，将内核链接边界转换为物理区间 |
+| `arch/boot_data.rs` | 封装已映射 FDT 的裸地址读取及借用有效期，安全解析后追加 FDT 存储保留区 |
 | `arch/loongarch64/boot/tables.rs` | 按 GUID 解析 QEMU 直接加载 ELF 时提供的系统配置表 |
 | `trap.rs` | 共享 trap 初始化与致命内核异常策略 |
-| `mm/mod.rs` | 统一初始化内核堆、发现物理内存并返回页框分配器，封装内部初始化顺序 |
+| `mm.rs` | 统一初始化内核堆、发现物理内存并返回页框分配器，封装内部初始化顺序 |
 | `mm/heap/mod.rs` | 固定 1 MiB 静态 buddy 堆及全局分配器 |
-| `mm/fdt/mod.rs` | FDT 读取和启动内存解析入口；只暴露原始内存描述与解析接口 |
+| `mm/fdt/mod.rs` | 安全的 FDT 字节切片解析入口，不读取原始地址或解释平台映射 |
 | `mm/fdt/header.rs`、`wire.rs` | 校验 FDT 头、保留表和数据块布局，以及有边界检查的大端整数和字符串读取 |
 | `mm/fdt/tree.rs`、`memory.rs` | 前者检查结构 token、属性顺序与递归深度，后者解释节点内存属性并收集 RAM、静态保留区和 initrd |
 | `mm/fdt/tests/` | 构造器、正常输入及错误输入测试分别存放，经同一解析入口验证 |
 | `mm/regions.rs` | 归一化 RAM/保留区并计算可用完整页，通过只读访问维护地图不变量 |
 | `mm/frame.rs` | 位图页框分配器及独占句柄，按 4 KiB 分配并在句柄销毁时回收 |
+| `mm/frame/bitmap.rs` | 页索引位图及预分配的非空字索引，以常数时间选择候选字并更新空闲状态 |
 | `mm/heap/tests/mod.rs` | 全局堆集合测试，以及独立内存池上的对齐、回收、耗尽和伙伴合并检查 |
 | `syscall.rs` | 共享 Linux syscall ABI 解码、正常返回处理及最小调用分发；不访问用户内存 |
 | `arch/*/syscall.rs` | 调用号、参数和返回值的寄存器位置，以及用户 syscall 来源判断 |
@@ -134,8 +142,9 @@ _start → kernel_main → clear_bss
                     → utils::logging::init
                     → trap::init → arch::trap::init
                     → mm::init(boot_arg) → heap::init
-                                        → discover → arch::boot::memory / kernel_region
-                                                   → fdt / regions → 物理内存地图
+                                        → arch::boot::memory → MappedFdt → fdt::parse
+                                        → discover → arch::boot::kernel_region / regions
+                                                   → 物理内存地图
                                         → FrameAllocator::new → 返回页框分配器
                     → console → arch::putchar
                     → ktest::run → SUITES → 各模块自检（仅 ktest）

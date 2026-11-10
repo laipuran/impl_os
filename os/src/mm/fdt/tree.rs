@@ -25,16 +25,19 @@ pub(super) fn parse(blob: Blob<'_>) -> Result<BootMemory, &'static str> {
             reserved: blob.reserved,
         },
     };
+
     if tree.token()? != BEGIN_NODE {
         return Err("missing FDT root node");
     }
     tree.node(Cells::default(), true, NodeKind::Root, 0)?;
+
     if tree.token()? != END {
         return Err("missing FDT end token");
     }
     if tree.structure[tree.cursor..].iter().any(|byte| *byte != 0) {
         return Err("data after FDT end token");
     }
+
     if tree.output.ram.is_empty() {
         return Err("no enabled FDT memory node");
     }
@@ -70,13 +73,16 @@ impl<'a> Tree<'a> {
         if depth > 32 {
             return Err("FDT nesting exceeds supported depth");
         }
+
         let (name, next) = cstring(self.structure, self.cursor)?;
         self.cursor = align4(next)?;
         if kind == NodeKind::Root && !name.is_empty() {
             return Err("invalid FDT root name");
         }
+
         let (properties, mut token) = self.properties(parent_enabled)?;
         properties.collect(kind, depth, parent_cells, &mut self.output)?;
+
         while token == BEGIN_NODE {
             let (name, _) = cstring(self.structure, self.cursor)?;
             if kind == NodeKind::ReservedRegion {
@@ -90,6 +96,7 @@ impl<'a> Tree<'a> {
             )?;
             token = self.token()?;
         }
+
         if token != END_NODE {
             return Err("invalid FDT node or property ordering");
         }

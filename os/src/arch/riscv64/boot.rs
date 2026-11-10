@@ -1,5 +1,6 @@
 //! RV 固件启动参数：入口汇编将 a1 中的 FDT 地址传给共享入口。
 
+use crate::arch::boot_data::MappedFdt;
 use crate::mm::{fdt, regions::Region};
 
 /// 在 bare 地址空间中读取固件设备树。
@@ -13,7 +14,8 @@ use crate::mm::{fdt, regions::Region};
 /// `boot_arg` 必须来自固件的 a1，指向完整、可读且不变的 FDT。
 pub unsafe fn memory(boot_arg: usize) -> Result<fdt::BootMemory, &'static str> {
     // SAFETY: 调用者保证固件 FDT 可读；RV 当前物理地址与访问地址相同。
-    let memory = unsafe { fdt::read(boot_arg, boot_arg, isize::MAX as usize) }?;
+    let blob = unsafe { MappedFdt::from_raw(boot_arg, boot_arg, isize::MAX as usize) }?;
+    let memory = blob.parse_memory()?;
     log::info!("FDT: physical={:#x}", boot_arg);
     Ok(memory)
 }

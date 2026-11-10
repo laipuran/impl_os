@@ -2,6 +2,7 @@
 
 use core::slice;
 
+use crate::arch::boot_data::MappedFdt;
 use crate::mm::{fdt, regions::Region};
 
 mod tables;
@@ -32,8 +33,9 @@ pub unsafe fn memory(boot_arg: usize) -> Result<fdt::BootMemory, &'static str> {
     let tables = tables::parse(boot_info, boot_arg)?;
     let address = mapped_address(tables.fdt, FDT_SIZE_LIMIT)?;
     // SAFETY: 调用者保证配置表中的 FDT 可读，地址已检查在 DMW 可表示范围；
-    // read 会验证总长度不超过 QEMU 保留的 1 MiB FDT 容量。
-    let mut memory = unsafe { fdt::read(tables.fdt, address, FDT_SIZE_LIMIT) }?;
+    // from_raw 会验证总长度不超过 QEMU 保留的 1 MiB FDT 容量。
+    let blob = unsafe { MappedFdt::from_raw(tables.fdt, address, FDT_SIZE_LIMIT) }?;
+    let mut memory = blob.parse_memory()?;
     memory.reserved.push(Region::new(0, BOOT_INFO_SIZE)?);
     if let Some(initrd) = tables.initrd {
         mapped_address(initrd.start, initrd.end - initrd.start)?;

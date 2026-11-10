@@ -1,8 +1,8 @@
-//! 多段 RAM、保留区、禁用节点和已映射 FDT 的读取。
+//! 多段 RAM、保留区及禁用节点的安全切片解析。
 
 use alloc::vec;
 
-use super::super::{parse, read, Region};
+use super::super::{parse, Region};
 use super::builder::{basic, Builder};
 
 #[cfg_attr(test, test)]
@@ -78,28 +78,8 @@ fn disabled_reserved_memory_skips_children() {
     );
 }
 
-#[cfg_attr(test, test)]
-fn mapped_blob_read() {
-    #[repr(align(8))]
-    struct Storage([u8; 1024]);
-
-    let blob = basic().finish();
-    let mut storage = Storage([0; 1024]);
-    storage.0[..blob.len()].copy_from_slice(&blob);
-    let mapped = storage.0.as_ptr() as usize;
-    // SAFETY: 对齐的局部数组包含完整且不变的 FDT，调用期间始终有效；
-    // 物理地址仅作为元数据记录，不用于解引用。
-    let memory = unsafe { read(0x100000, mapped, storage.0.len()) }.unwrap();
-    assert!(memory
-        .reserved
-        .contains(&Region::new(0x100000, blob.len()).unwrap()));
-    // SAFETY: 同一有效 FDT；较小容量应在构造完整切片前被拒绝。
-    assert!(unsafe { read(0x100000, mapped, blob.len() - 1) }.is_err());
-}
-
 pub(super) fn run() {
     multiple_banks_and_reservations();
     single_cells_and_disabled_nodes();
     disabled_reserved_memory_skips_children();
-    mapped_blob_read();
 }
