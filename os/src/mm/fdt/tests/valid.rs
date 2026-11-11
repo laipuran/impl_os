@@ -3,7 +3,7 @@
 use alloc::vec;
 
 use super::super::{parse, Region};
-use super::builder::{basic, Builder};
+use crate::ktest::support::fdt::{basic, Builder};
 
 #[cfg_attr(test, test)]
 fn multiple_banks_and_reservations() {

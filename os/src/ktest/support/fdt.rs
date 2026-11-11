@@ -2,12 +2,14 @@
 
 use alloc::{vec, vec::Vec};
 
-use super::super::{
-    header::MAGIC,
-    tree::{BEGIN_NODE, END, END_NODE, PROP},
-};
+// Devicetree Specification v0.4 §5.2 and §5.4 wire values.
+const MAGIC: u32 = 0xd00dfeed;
+const BEGIN_NODE: u32 = 1;
+const END_NODE: u32 = 2;
+const PROP: u32 = 3;
+const END: u32 = 9;
 
-pub(super) struct Builder {
+pub(crate) struct Builder {
     tree: Vec<u8>,
     strings: Vec<u8>,
     pub reservations: Vec<(u64, u64)>,
@@ -102,7 +104,7 @@ impl Builder {
     }
 }
 
-pub(super) fn basic() -> Builder {
+pub(crate) fn basic() -> Builder {
     let mut builder = Builder::new(2, 2);
     builder.memory(&[0, 0x80000000, 0, 0x40000000]);
     builder

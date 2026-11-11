@@ -1,4 +1,4 @@
-//! 在 trap 自检提供的可信用户执行环境中验证 syscall ABI。
+//! 在统一测试层提供的可信用户执行环境中验证 syscall ABI。
 
 use core::arch::global_asm;
 

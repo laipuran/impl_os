@@ -1,12 +1,13 @@
 //! 在局部数组上验证原始启动存储读取，不解引用合成物理地址。
 
 use super::{fdt, MappedFdt, Region};
+use crate::ktest::support::fdt::basic;
 
 #[repr(align(8))]
 struct Storage([u8; 1024]);
 
 fn mapped_blob_read() {
-    let blob = fdt::tests::memory_blob();
+    let blob = basic().finish();
     let mut storage = Storage([0; 1024]);
     storage.0[..blob.len()].copy_from_slice(&blob);
     let mapped = storage.0.as_ptr() as usize;
@@ -28,7 +29,7 @@ fn mapped_blob_read() {
 }
 
 fn storage_bounds() {
-    let blob = fdt::tests::memory_blob();
+    let blob = basic().finish();
     let mut storage = Storage([0; 1024]);
     storage.0[..blob.len()].copy_from_slice(&blob);
     let mapped = storage.0.as_ptr() as usize;
@@ -44,7 +45,7 @@ fn storage_bounds() {
 }
 
 fn malformed_structure_is_a_safe_parse_error() {
-    let mut blob = fdt::tests::memory_blob();
+    let mut blob = basic().finish();
     let structure = u32::from_be_bytes(blob[8..12].try_into().unwrap()) as usize;
     blob[structure..structure + 4].copy_from_slice(&0u32.to_be_bytes());
     let mut storage = Storage([0; 1024]);

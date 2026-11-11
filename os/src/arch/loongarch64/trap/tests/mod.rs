@@ -28,9 +28,6 @@ extern "C" {
     fn __loongarch_kernel_test_user_float();
 }
 
-#[repr(C, align(16))]
-struct UserStack([u8; 4096]);
-static mut USER_STACK: UserStack = UserStack([0; 4096]);
 static OUTER_SP: AtomicUsize = AtomicUsize::new(0);
 static NESTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static KERNEL_TP: AtomicUsize = AtomicUsize::new(0);
@@ -146,10 +143,6 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     true
 }
 
-fn user_address(address: usize) -> usize {
-    address - 0x9000_0000_0000_0000
-}
-
 fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[usize; 32]) {
     assert_eq!(context.pc(), pc);
     assert_eq!(context.raw_status() & 0xf, 3);
@@ -159,12 +152,10 @@ fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 }
 
-/// 测试异常解码、嵌套内核 break/refill、用户态现场切换、syscall ABI 与任务运行。
+/// 测试异常解码、嵌套内核 break/refill 与用户态现场切换。
 ///
-/// 临时低地址 DMW1 别名允许 PLV3 访问物理 RAM。它映射所有 RAM，
-/// 不提供隔离，仅用于此受控内核测试代码；
-/// 函数报告成功前会恢复原始 DMW1。
-pub fn kernel_test() {
+/// 临时低地址用户窗口映射 RAM，不提供隔离。
+pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     decode_test();
     let mut kernel_call = TrapContext::user(0x1000, 0x2000);
     kernel_call.estat = 11 << 16;
@@ -185,30 +176,11 @@ pub fn kernel_test() {
     assert_eq!(unsafe { __loongarch_kernel_test_kernel() }, 1);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
-    let previous_window: usize;
-    // SAFETY: 单 CPU 的 feature 专用启动路径独占 DMW1。MAT=CC，启用 PLV3，
-    // VSEG=0；高地址、仅 PLV0 可用的 DMW0 保持不变。这不提供内存隔离。
-    unsafe {
-        asm!(
-            "csrrd {saved}, 0x181",
-            "li.w {tmp}, 0x18",
-            "dbar 0",
-            "csrwr {tmp}, 0x181",
-            "invtlb 0x0, $zero, $zero",
-            "ibar 0",
-            saved = out(reg) previous_window,
-            tmp = out(reg) _,
-            options(nostack),
-        );
-    }
-
-    // SAFETY: 构造单 CPU 内核测试栈的 raw pointer 不创建引用或别名；
-    // 仅受控用户 context 使用此 RAM。
-    let stack = user_address(unsafe { core::ptr::addr_of_mut!(USER_STACK.0) } as usize + 4096);
-    let first = user_address(__loongarch_kernel_test_user_first as *const () as usize);
-    let second = user_address(__loongarch_kernel_test_user_second as *const () as usize);
-    let privileged = user_address(__loongarch_kernel_test_user_privileged as *const () as usize);
-    let floating = user_address(__loongarch_kernel_test_user_float as *const () as usize);
+    let stack = env.stack();
+    let first = env.address(__loongarch_kernel_test_user_first as *const () as usize);
+    let second = env.address(__loongarch_kernel_test_user_second as *const () as usize);
+    let privileged = env.address(__loongarch_kernel_test_user_privileged as *const () as usize);
+    let floating = env.address(__loongarch_kernel_test_user_float as *const () as usize);
     let mut context = TrapContext::user(first, stack);
     for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
         if register != 3 {
@@ -260,18 +232,8 @@ pub fn kernel_test() {
         &second_regs,
     );
 
-    // 移除整个用户别名并使缓存的地址转换失效，令下一次取指发生 TLB miss。
-    // 此层不遍历页表。
-    // SAFETY: 仅修改 feature 专用用户窗口；内核 DMW0 保持映射，
-    // 受控用户 context 无法执行任何指令。
-    unsafe {
-        asm!(
-            "csrwr $zero, 0x181",
-            "invtlb 0x0, $zero, $zero",
-            "ibar 0",
-            options(nostack),
-        )
-    };
+    // 撤销用户别名并同步翻译状态，使下一次取指发生 TLB miss。
+    env.revoke();
     context.set_pc(first);
     // SAFETY: 故意不映射的取指由 TLBRENTRY 捕获，
     // context 和暂停的内核栈仍通过 DMW0 保持映射。
@@ -287,42 +249,11 @@ pub fn kernel_test() {
     assert_eq!(context.registers(), &second_regs);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
-    // SAFETY: 恢复相同的 feature 专用低地址用户别名，验证特殊 refill
-    // 返回路径之后正常异常处理仍然有效。
-    unsafe {
-        asm!(
-            "li.w {tmp}, 0x18",
-            "csrwr {tmp}, 0x181",
-            "invtlb 0x0, $zero, $zero",
-            "ibar 0",
-            tmp = out(reg) _,
-            options(nostack),
-        );
-    }
+    // 重建用户别名，验证 refill 返回后正常异常处理仍然有效。
+    env.enable();
     // SAFETY: 原始受控 syscall 指令再次被映射，
     // 仍使用同一独占 context 及有效用户栈。
     unsafe { run_user(&mut context) };
     assert_user(&context, first, ExceptionCause::SystemCall, &second_regs);
-    // SAFETY: DMW1 仍提供固定探针与独占栈的 PLV3 别名；中断关闭，
-    // 探针只操作寄存器并返回 trap，不访问暂停的内核状态。
-    unsafe {
-        crate::syscall::tests::kernel_test(user_address(crate::syscall::tests::entry()), stack)
-    };
-    // SAFETY: 在恢复 DMW1 前执行全部可信任务探针；低地址用户代码与私有栈
-    // 仍有效，各任务同步返回后才复用该栈，中断保持关闭。
-    unsafe { crate::task::tests::kernel_test(user_address(crate::task::tests::entry()), stack) };
-
-    // SAFETY: 所有用户执行均已返回高地址内核映射；
-    // 恢复 DMW1，在正常启动前移除 feature 专用用户映射。
-    unsafe {
-        asm!(
-            "dbar 0",
-            "csrwr {saved}, 0x181",
-            "invtlb 0x0, $zero, $zero",
-            "ibar 0",
-            saved = inout(reg) previous_window => _,
-            options(nostack),
-        );
-    }
     crate::println!("loongarch64: trap kernel tests passed");
 }

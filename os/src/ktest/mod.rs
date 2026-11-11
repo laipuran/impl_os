@@ -1,5 +1,10 @@
 //! 启动期内核测试，仅在启用 `ktest` feature 时编译。
 
+pub(crate) mod support;
+pub(crate) mod user_env;
+
+use user_env::UserEnv;
+
 use crate::mm::frame::FrameAllocator;
 
 struct Suite {
@@ -10,8 +15,8 @@ struct Suite {
 // 将测试套件选择与运行器及正常启动路径分离。
 const SUITES: &[Suite] = &[
     Suite {
-        name: "trap",
-        run: |_| crate::arch::trap::tests::kernel_test(),
+        name: "user execution",
+        run: |_| user_execution(),
     },
     Suite {
         name: "heap",
@@ -39,6 +44,21 @@ const SUITES: &[Suite] = &[
         run: |_| crate::arch::boot::tests::kernel_test(),
     },
 ];
+
+// 所有用户探针顺序执行，独占栈与架构映射贯穿整个执行组。
+fn user_execution() {
+    // SAFETY: 仅启动 CPU 执行此组，禁用中断且没有其他用户执行。
+    let mut env = unsafe { UserEnv::new() };
+    crate::arch::trap::tests::kernel_test(&mut env);
+    let stack = env.stack();
+    // SAFETY: 固定探针和独占栈均处于当前可信用户环境中；中断关闭，
+    // 各探针同步返回后才复用栈。RV 依赖 bare 模式下固件 PMP 允许访问 RAM；
+    // LA 的临时窗口映射 RAM。这些机制均不提供用户隔离。
+    unsafe {
+        crate::syscall::tests::kernel_test(env.address(crate::syscall::tests::entry()), stack);
+        crate::task::tests::kernel_test(env.address(crate::task::tests::entry()), stack);
+    }
+}
 
 /// 正常初始化后，按声明顺序运行配置的测试套件。
 ///

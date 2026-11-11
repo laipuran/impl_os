@@ -19,11 +19,6 @@ extern "C" {
     fn riscv_kernel_test_user_float();
 }
 
-#[repr(C, align(16))]
-struct UserStack([u8; 4096]);
-
-static mut USER_STACK: UserStack = UserStack([0; 4096]);
-
 unsafe extern "C" fn run_user_shim(context: &mut TrapContext) {
     // SAFETY: 汇编 wrapper 仅在 trap 初始化后使用内核测试独占的 context、
     // 固定用户代码及有效的私有栈调用。
@@ -151,11 +146,10 @@ fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usi
     assert_kernel_environment();
 }
 
-/// 测试异常解码、嵌套 S-mode ebreak、用户态现场切换、syscall ABI 与任务运行。
+/// 测试异常解码、嵌套 S-mode ebreak 与用户态现场切换。
 ///
-/// 用户探针要求 SBI PMP 在 bare mode 下允许访问 RAM。它们不映射内存，
-/// 也不提供隔离，仅执行这些固定且可信的代码片段。
-pub fn kernel_test() {
+/// 用户探针依赖 bare mode 下允许访问 RAM 的固件 PMP；不提供隔离。
+pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     assert_cause_decoding();
     let mut kernel_call = TrapContext::user(0x1000, 0x2000);
     kernel_call.scause = 9; // S-mode ecall 不是用户 syscall。
@@ -171,11 +165,11 @@ pub fn kernel_test() {
     );
     assert_kernel_environment();
 
-    let stack = core::ptr::addr_of_mut!(USER_STACK) as usize + core::mem::size_of::<UserStack>();
-    let first = riscv_kernel_test_user_first as *const () as usize;
-    let second = riscv_kernel_test_user_second as *const () as usize;
-    let privileged = riscv_kernel_test_user_privileged as *const () as usize;
-    let float = riscv_kernel_test_user_float as *const () as usize;
+    let stack = env.stack();
+    let first = env.address(riscv_kernel_test_user_first as *const () as usize);
+    let second = env.address(riscv_kernel_test_user_second as *const () as usize);
+    let privileged = env.address(riscv_kernel_test_user_privileged as *const () as usize);
+    let float = env.address(riscv_kernel_test_user_float as *const () as usize);
     let mut context = TrapContext::user(first, stack);
     set_user_registers(&mut context, 0x300, stack);
     context.sstatus = usize::MAX; // 入口必须丢弃恶意特权位。
@@ -223,11 +217,5 @@ pub fn kernel_test() {
     );
     assert_user_context(&context, 0x600, stack - 48, float, 2);
     assert!(context.bad_addr() == 0 || context.bad_addr() == 0x53);
-    // SAFETY: 与已有用户探针相同，入口与独占栈位于 PMP 允许访问的 RAM；
-    // 中断关闭，固定 syscall 探针不访问内核数据，不提供隔离。
-    unsafe { crate::syscall::tests::kernel_test(crate::syscall::tests::entry(), stack) };
-    // SAFETY: 固定任务探针继续使用相同的可信用户执行环境及独占栈；
-    // 各任务同步返回后才复用该栈，中断始终关闭。
-    unsafe { crate::task::tests::kernel_test(crate::task::tests::entry(), stack) };
     crate::println!("riscv64: trap kernel tests passed");
 }
