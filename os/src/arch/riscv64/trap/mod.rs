@@ -182,4 +182,5 @@ pub unsafe fn run_user(context: &mut TrapContext) {
 }
 
 #[cfg(feature = "ktest")]
+#[path = "../../../ktest/arch/riscv64/mod.rs"]
 pub(crate) mod tests;

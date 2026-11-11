@@ -26,7 +26,7 @@ RISC-V 使用 SBI System Reset 关机，固件支持该扩展时会退出 QEMU�
 
 `ktest` 只控制测试代码，不控制 trap、syscall ABI 或内存管理等正式能力。共享入口先正常初始化内核，再调用 `os/src/ktest/mod.rs` 中的 `run`，借用 `mm::init(boot_arg)` 返回的页框分配器；默认构建不编译测试入口、模块自检或汇编探针。这里使用 `#[cfg(feature = "ktest")]`，不是 Rust 的 `#[cfg(test)]` 或自定义 `#[cfg(ktest)]`，也不依赖 Cargo 测试 harness。
 
-自检代码放在所属模块的 `tests/` 子目录，由父模块用同一个 `ktest` feature 控制；仅供自检使用的汇编也放在该子目录。新增独立测试组时，在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 接收页框分配器的共享引用且无返回值；无需使用分配器的现有测试可通过 `|_| kernel_test()` 适配。统一入口的 `user execution` 组建立可信环境，在同一有效期内依次执行 trap、syscall ABI 和任务测试。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
+自检源码和仅供自检使用的汇编集中在 `os/src/ktest/`，按 `mm/`、`boot/`、`arch/`、`syscall/` 和 `task/` 分组；架构专属探针与对应测试放在一起，共享 fixture 位于 `support/`，用户执行环境位于 `user_env.rs`。需要白盒访问的测试仍由原所属模块通过 `#[path = "..."]` 显式声明一次并保留原有条件编译，不扩大正式接口。新增独立测试组时，在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 接收页框分配器的共享引用且无返回值；无需使用分配器的现有测试可通过 `|_| kernel_test()` 适配。统一入口的 `user execution` 组建立可信环境，在同一有效期内依次执行 trap、syscall ABI 和任务测试。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
 
 测试在启动 CPU 上关闭中断、依次执行，每组测试返回前必须恢复临时映射、机器状态并释放测试资源。失败直接走现有 panic 停机，不捕获后继续执行；故意触发致命异常或无法恢复状态的测试应在独立 QEMU 实例中验证，不加入这条顺序执行路径。
 
@@ -130,7 +130,7 @@ just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kerne
 
 ## Syscall ABI 内核测试
 
-同一组 `just test` 命令也验证 Linux syscall ABI。测试位于 `os/src/syscall/tests/`，由统一入口在受控用户执行环境中调用：RISC-V 使用 bare 模式，依赖固件 PMP 允许访问探针与栈；LoongArch 使用临时 PLV3 低地址 DMW1 别名，正常离开环境时恢复原值并同步翻译状态。两者均不提供用户隔离，也不注册依赖另一套件遗留状态的独立套件。
+同一组 `just test` 命令也验证 Linux syscall ABI。测试位于 `os/src/ktest/syscall/`，由统一入口在受控用户执行环境中调用：RISC-V 使用 bare 模式，依赖固件 PMP 允许访问探针与栈；LoongArch 使用临时 PLV3 低地址 DMW1 别名，正常离开环境时恢复原值并同步翻译状态。两者均不提供用户隔离，也不注册依赖另一套件遗留状态的独立套件。
 
 - 固定用户探针连续执行三次 syscall，检查调用号和全部六个参数，包含高 32 位非零、最高位为一及负数的原始机器字。
 - 正常返回仅修改 a0 和 PC，保留其余整数寄存器及异常元数据；用户将超过 32 位的成功值和负 errno 复制到下一次调用参数，验证实际可见结果和四字节 PC 推进，最后到达指定 breakpoint。
@@ -141,7 +141,7 @@ just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kerne
 
 ## 任务执行内核测试
 
-同一组 `just test` 命令也通过 `os/src/task/tests/` 中的真实用户探针验证 `Task::run`。统一入口在 syscall ABI 测试后调用任务测试，复用可信映射和独占用户栈；LoongArch 在恢复 DMW1 前完成全部任务执行，默认启动不建立用户映射。
+同一组 `just test` 命令也通过 `os/src/ktest/task/` 中的真实用户探针验证 `Task::run`。统一入口在 syscall ABI 测试后调用任务测试，复用可信映射和独占用户栈；LoongArch 在恢复 DMW1 前完成全部任务执行，默认启动不建立用户映射。
 
 - 连续未知 syscall 在用户态观察到 `-ENOSYS` 并继续执行；包含高 32 位非零、低 32 位为 `exit` 的调用号，防止错误截断调用号。
 - `exit` 与 `exit_group` 只保存参数低八位，保留退出处 PC 和 a0，不执行退出后的指令。

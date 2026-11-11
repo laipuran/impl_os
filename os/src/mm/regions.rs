@@ -133,5 +133,5 @@ fn push_aligned(output: &mut Vec<Region>, start: usize, end: usize, page_size: u
 }
 
 #[cfg(any(test, feature = "ktest"))]
-#[path = "regions/tests/mod.rs"]
+#[path = "../ktest/mm/regions/mod.rs"]
 pub mod tests;

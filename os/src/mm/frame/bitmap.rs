@@ -80,5 +80,5 @@ impl Bitmap {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "tests/bitmap.rs"]
+#[path = "../../ktest/mm/frame/bitmap.rs"]
 pub(super) mod tests;

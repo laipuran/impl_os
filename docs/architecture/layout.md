@@ -4,7 +4,7 @@
 
 `just` 将内核构建交给 Make，Make 调用 workspace 中的 `os` crate；`os/build.rs` 按目标选择链接脚本，Rust 按目标选择架构实现。比赛构建入口为 `make all`。开发命令和目标见[任务分工](../development/targets.md)。
 
-两架构的入口汇编设置启动 CPU 和栈，将平台启动参数传给 `kernel_main`。共享入口清零 BSS，初始化日志、trap 和内存管理，再按配置运行自检并关机。panic 输出诊断后停机，不报告成功关机。非启动 CPU 被停放，当前代码假设单 CPU、关闭中断；控制台不提供并发保护。
+两架构的入口汇编设置启动 CPU 和栈，将平台启动参数传给 `kernel_main`。共享入口清零 BSS，初始化日志、trap 和内存管理，按配置运行自检后调用架构关机入口；LoongArch 当前仅停放 CPU。panic 输出诊断后停机，不报告成功关机。非启动 CPU 被停放，当前代码假设单 CPU、关闭中断；控制台不提供并发保护。
 
 ## 模块边界
 
