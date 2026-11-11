@@ -21,7 +21,7 @@ _start → kernel_main → clear_bss → 日志和 trap 初始化
                                → arch::boot::memory → MappedFdt → fdt::parse
                                → discover → regions::MemoryMap → FrameAllocator
                     → ktest::run（仅 ktest）→ arch::shutdown
-用户现场 → arch::trap → syscall / task
+task → arch::trap::run_user → 用户陷阱返回 → syscall 解码与分发
 panic → console → arch::halt
 ```
 

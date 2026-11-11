@@ -1,7 +1,7 @@
 //! 不支持的内存描述、损坏的数据块及解析深度限制。
 
 use super::super::parse;
-use super::builder::{basic, Builder};
+use crate::ktest::support::fdt::{basic, Builder};
 
 #[cfg_attr(test, test)]
 fn unsupported_descriptions_fail() {

@@ -26,7 +26,7 @@ RISC-V 使用 SBI System Reset 关机，固件支持该扩展时会退出 QEMU�
 
 `ktest` 只控制测试代码，不控制 trap、syscall ABI 或内存管理等正式能力。共享入口先正常初始化内核，再调用 `os/src/ktest/mod.rs` 中的 `run`，借用 `mm::init(boot_arg)` 返回的页框分配器；默认构建不编译测试入口、模块自检或汇编探针。这里使用 `#[cfg(feature = "ktest")]`，不是 Rust 的 `#[cfg(test)]` 或自定义 `#[cfg(ktest)]`，也不依赖 Cargo 测试 harness。
 
-自检代码放在所属模块的 `tests/` 子目录，由父模块用同一个 `ktest` feature 控制；仅供自检使用的汇编也放在该子目录。新增独立测试组时，在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 接收页框分配器的共享引用且无返回值；无需使用分配器的现有测试可通过 `|_| kernel_test()` 适配。依赖已有测试组受控执行环境的辅助测试由该组调用，不单独注册；syscall ABI 与任务测试的接入见下文。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
+自检代码放在所属模块的 `tests/` 子目录，由父模块用同一个 `ktest` feature 控制；仅供自检使用的汇编也放在该子目录。新增独立测试组时，在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 接收页框分配器的共享引用且无返回值；无需使用分配器的现有测试可通过 `|_| kernel_test()` 适配。统一入口的 `user execution` 组建立可信环境，在同一有效期内依次执行 trap、syscall ABI 和任务测试。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
 
 测试在启动 CPU 上关闭中断、依次执行，每组测试返回前必须恢复临时映射、机器状态并释放测试资源。失败直接走现有 panic 停机，不捕获后继续执行；故意触发致命异常或无法恢复状态的测试应在独立 QEMU 实例中验证，不加入这条顺序执行路径。
 
@@ -72,7 +72,7 @@ LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小�
 
 两架构的 `ktest` 均执行 `physical regions` 和 `FDT memory` 测试组。区间测试覆盖合并、扣除、页对齐、溢出和无可用页，并穷举八个页面的保留组合。FDT 测试覆盖多 RAM 区间、一或两个 cell、禁用节点、静态保留区、initrd，以及截断、重叠和不支持的描述等错误输入。LoongArch 额外执行 `boot tables` 测试，检查 GUID 查找、initrd 描述、缺失或重复表项、截断、溢出和 DMW 地址转换。
 
-`FDT memory` 只测试安全的切片解析。原始存储读取移至 `arch/boot_data/tests/`，由独立的 `boot FDT mapping` 测试组验证：读取完整且不变的局部数组、记录 FDT 本体的物理占用、接受恰好足够的容量、拒绝不足头部或完整载荷的容量、拒绝物理地址未对齐或溢出。另用头部有效但结构 token 损坏的载荷，确认存储读取成功后由安全解析接口返回错误。合成物理地址不用于解引用或实际页框分配；这些测试不能证明固件提供的真实地址可读。
+`FDT memory` 只测试安全的切片解析；它与 `boot FDT mapping` 测试组直接使用 `ktest/support/fdt.rs` 中独立编码的共享样本构造器，不以解析器作为预期值来源。后者验证原始存储读取：读取完整且不变的局部数组、记录 FDT 本体的物理占用、接受恰好足够的容量、拒绝不足头部或完整载荷的容量、拒绝物理地址未对齐或溢出。另用头部有效但结构 token 损坏的载荷，确认存储读取成功后由安全解析接口返回错误。合成物理地址不用于解引用或实际页框分配；这些测试不能证明固件提供的真实地址可读。
 
 在开发容器内运行以下命令，检查实际 RAM 区间是否随配置变化：
 
@@ -130,7 +130,7 @@ just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kerne
 
 ## Syscall ABI 内核测试
 
-同一组 `just test` 命令也验证 Linux syscall ABI。测试位于 `os/src/syscall/tests/`，由 trap 自检在其受控用户执行环境中调用：RISC-V 使用 bare 模式，依赖固件 PMP 允许访问探针与栈；LoongArch 使用临时 PLV3 低地址 DMW1 别名，并在返回统一测试入口前由 trap 自检恢复。两者均不提供用户隔离，也不注册依赖另一套件遗留状态的独立套件。
+同一组 `just test` 命令也验证 Linux syscall ABI。测试位于 `os/src/syscall/tests/`，由统一入口在受控用户执行环境中调用：RISC-V 使用 bare 模式，依赖固件 PMP 允许访问探针与栈；LoongArch 使用临时 PLV3 低地址 DMW1 别名，正常离开环境时恢复原值并同步翻译状态。两者均不提供用户隔离，也不注册依赖另一套件遗留状态的独立套件。
 
 - 固定用户探针连续执行三次 syscall，检查调用号和全部六个参数，包含高 32 位非零、最高位为一及负数的原始机器字。
 - 正常返回仅修改 a0 和 PC，保留其余整数寄存器及异常元数据；用户将超过 32 位的成功值和负 errno 复制到下一次调用参数，验证实际可见结果和四字节 PC 推进，最后到达指定 breakpoint。
@@ -141,7 +141,7 @@ just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kerne
 
 ## 任务执行内核测试
 
-同一组 `just test` 命令也通过 `os/src/task/tests/` 中的真实用户探针验证 `Task::run`。测试由 trap 自检在 syscall ABI 测试后调用，复用其可信映射和独占用户栈；LoongArch 在恢复 DMW1 前完成全部任务执行，不增加独立测试组或默认启动的用户映射。
+同一组 `just test` 命令也通过 `os/src/task/tests/` 中的真实用户探针验证 `Task::run`。统一入口在 syscall ABI 测试后调用任务测试，复用可信映射和独占用户栈；LoongArch 在恢复 DMW1 前完成全部任务执行，默认启动不建立用户映射。
 
 - 连续未知 syscall 在用户态观察到 `-ENOSYS` 并继续执行；包含高 32 位非零、低 32 位为 `exit` 的调用号，防止错误截断调用号。
 - `exit` 与 `exit_group` 只保存参数低八位，保留退出处 PC 和 a0，不执行退出后的指令。

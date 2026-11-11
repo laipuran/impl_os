@@ -1,4 +1,4 @@
-//! 在架构 trap 自检的可信用户映射中执行任务生命周期探针。
+//! 在统一测试层提供的可信用户环境中执行任务生命周期探针。
 
 use core::arch::global_asm;
 
@@ -64,7 +64,7 @@ unsafe fn assert_finished(task: &mut Task, status: ExitStatus) {
 /// # Safety
 /// 调用者须满足 [`Task::run`] 的前提；`user_entry` 必须是 [`entry`] 在用户
 /// 映射中的可执行地址，完整探针须可取指并保持各标签相对入口的偏移。
-/// `stack` 为架构自检独占的 4096 字节用户栈顶，须按 16 字节对齐。
+/// `stack` 为测试环境独占的 4096 字节用户栈顶，须按 16 字节对齐。
 /// 整个测试期间保持映射有效、中断关闭，且仅在单 CPU 上执行；不提供隔离。
 pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
     let user_address =
