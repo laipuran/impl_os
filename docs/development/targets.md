@@ -31,7 +31,7 @@
 | `clean` | 转发给 `make clean` |
 | `fmt` | 修改 Rust 源码格式 |
 | `fmt-check` | 只检查格式 |
-| `lint` | 两个裸机 target 的 Clippy，不导出根目录 ELF |
+| `lint` | 两个裸机 target 的默认和 `ktest` 配置分别运行 Clippy，不导出根目录 ELF |
 | `vendor` | 按锁文件更新依赖源码和校验链接，可联网；不属于构建前置步骤 |
 | `check` | 组合 `fmt-check` 和 `lint` |
 | `run <rv\|la> [QEMU 参数…]` | 构建所选架构的 release ELF，启动 QEMU |

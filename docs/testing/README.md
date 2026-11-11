@@ -4,7 +4,7 @@
 
 | 命令 | 检查范围 | 不覆盖 |
 | --- | --- | --- |
-| 容器内 `just check` | Rust 格式、双架构 Clippy | 链接产物、启动行为、内核功能 |
+| 容器内 `just check` | Rust 格式、双架构默认和 `ktest` 配置的 Clippy | 链接产物、启动行为、内核功能 |
 | 容器内 `just build` / `make all` | 两架构 ELF 构建与导出 | 启动及运行时语义 |
 | 宿主 `just judge-build` | 原始比赛镜像断网，过滤隐藏文件和目录，以空 Cargo 缓存及独立构建目录构建双架构 ELF | 启动、评分 |
 | 容器内 `just run rv` / `just run la` | 手动观察启动日志和进程退出 | 官方用户程序的正确性 |
@@ -152,12 +152,6 @@ just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kerne
 
 任务对 syscall 完成失败的处理可用独立 debug QEMU 实例验证：在 `Task::run` 调用 `syscall::complete` 前暂停，将已捕获 syscall 现场的 PC 改为 `usize::MAX - 3`，再运行到保存终止状态处，检查任务成为 `Finished(Faulted)`，且注入后的完整现场保持不变。不恢复执行该边界地址；这项故障注入不属于上述顺序自检。
 
-## 启用自检时的静态检查
+## 静态检查
 
-特性分支的静态检查需显式传入功能：
-
-```sh
-make prepare-vendor
-cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target riscv64gc-unknown-none-elf --features ktest -- -D warnings
-cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target loongarch64-unknown-none --features ktest -- -D warnings
-```
+容器内运行 `just check`，依次检查格式并对 RISC-V 和 LoongArch 的默认配置、`ktest` 配置分别运行 Clippy。四种配置均使用锁定依赖和离线模式，并将警告视为错误；`just lint` 单独运行同一 Clippy 矩阵。检查会准备 vendor 校验链接，但不会安装工具链、下载依赖、启动 QEMU 或导出比赛 ELF，也不能替代链接和运行时验证。
