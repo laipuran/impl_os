@@ -2,13 +2,13 @@ use core::arch::{asm, global_asm};
 
 global_asm!(include_str!("entry.S"));
 
-pub mod boot;
+pub(crate) mod boot;
 pub(crate) mod syscall;
-pub mod trap;
+pub(crate) mod trap;
 
-pub const NAME: &str = "riscv64";
+pub(crate) const NAME: &str = "riscv64";
 
-pub fn putchar(byte: u8) {
+pub(crate) fn putchar(byte: u8) {
     const UART: *mut u8 = 0x1000_0000 as *mut u8;
     // SAFETY: QEMU virt maps a 16550 UART here; paging is still disabled.
     unsafe {
@@ -19,7 +19,7 @@ pub fn putchar(byte: u8) {
     }
 }
 
-pub fn shutdown() -> ! {
+pub(crate) fn shutdown() -> ! {
     // SAFETY: SBI v0.2 system reset, shutdown type, no error reason.
     // The firmware may return SBI_ERR_NOT_SUPPORTED; park if it does.
     unsafe {
@@ -35,7 +35,7 @@ pub fn shutdown() -> ! {
     halt()
 }
 
-pub fn halt() -> ! {
+pub(crate) fn halt() -> ! {
     loop {
         // SAFETY: boot runs in supervisor mode; interrupts remain disabled.
         unsafe { asm!("wfi", options(nomem, nostack)) };

@@ -2,13 +2,13 @@ use core::arch::{asm, global_asm};
 
 global_asm!(include_str!("entry.S"));
 
-pub mod boot;
+pub(crate) mod boot;
 pub(crate) mod syscall;
-pub mod trap;
+pub(crate) mod trap;
 
-pub const NAME: &str = "loongarch64";
+pub(crate) const NAME: &str = "loongarch64";
 
-pub fn putchar(byte: u8) {
+pub(crate) fn putchar(byte: u8) {
     // QEMU virt UART through DMW0; official contest QEMU still needs validation.
     const UART: *mut u8 = 0x9000_0000_1fe0_01e0 as *mut u8;
     // SAFETY: entry.S installs the PLV0 cached direct mapping used here.
@@ -20,14 +20,14 @@ pub fn putchar(byte: u8) {
     }
 }
 
-pub fn shutdown() -> ! {
+pub(crate) fn shutdown() -> ! {
     // TODO: validate the official machine's poweroff mechanism; do not guess
     // an MMIO address or claim that this path exits QEMU successfully.
     crate::println!("loongarch64: poweroff not implemented; parking CPU");
     halt()
 }
 
-pub fn halt() -> ! {
+pub(crate) fn halt() -> ! {
     loop {
         // SAFETY: boot runs at PLV0 with interrupts disabled.
         unsafe { asm!("idle 0", options(nomem, nostack)) };

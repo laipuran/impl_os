@@ -6,7 +6,7 @@
 - `riscv64/`：QEMU virt、S-mode 入口、链接地址、SBI 和早期 UART。
 - `loongarch64/`：QEMU virt、PLV0/DMW 启动、链接地址和早期 UART；平台关机未实现。
 
-两个架构导出同一组接口：`NAME`、`putchar`、`shutdown`、`halt`、`boot::{memory, kernel_region}`，以及 `trap::{init, TrapContext, run_user}`。入口汇编按 C ABI 将平台启动参数传给 `kernel_main`，`boot` 模块负责解释启动协议并转换地址。UART 地址由 QEMU virt 平台确定：RISC-V 直接访问物理地址，LoongArch 经 DMW0 访问。
+两个架构由门面显式导出同一组接口：`NAME`、`putchar`、`shutdown`、`halt`、`boot::{memory, kernel_region}`、syscall ABI 和 `trap::{init, TrapContext, run_user}`；自检入口仅在启用 `ktest` 时可用。入口汇编按 C ABI 将平台启动参数传给 `kernel_main`，`boot` 模块负责解释启动协议并转换地址。UART 地址由 QEMU virt 平台确定：RISC-V 直接访问物理地址，LoongArch 经 DMW0 访问。
 
 `boot_data.rs` 供两架构复用：`MappedFdt::from_raw` 在明确的可读性和有效期前提下借用原始启动存储，随后通过安全接口解析并记录 FDT 本体占用。`mm::fdt` 只处理字节切片，不负责裸地址或平台映射；平台额外的启动块和 initrd 保留仍由各自的 `boot` 模块追加。
 
