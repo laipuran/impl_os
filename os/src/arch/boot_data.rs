@@ -1,6 +1,6 @@
 //! 读取架构已建立映射的启动数据，将裸地址访问与安全的 FDT 解析分开。
 
-use crate::mm::{fdt, regions::Region};
+use crate::mm::{boot_memory::BootMemory, fdt, regions::Region};
 
 /// 借用已映射的 FDT 存储；不代表其节点结构或内存描述已经通过解析。
 pub(super) struct MappedFdt<'a> {
@@ -54,7 +54,7 @@ impl MappedFdt<'_> {
     /// # Errors
     ///
     /// FDT 节点结构或内存描述无效、不受支持时返回错误。
-    pub(super) fn parse_memory(&self) -> Result<fdt::BootMemory, &'static str> {
+    pub(super) fn parse_memory(&self) -> Result<BootMemory, &'static str> {
         let mut memory = fdt::parse(self.bytes)?;
         // TODO: 这里我们不对 `FDT` 进行完全解析，暂时把 `FDT` 放在 `mm`，后续
         // 可以移出为单独模块，可以不保留 `FDT`。
