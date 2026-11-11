@@ -192,4 +192,5 @@ extern "C" fn __loongarch_handle_kernel(context: &mut TrapContext) {
 }
 
 #[cfg(feature = "ktest")]
+#[path = "../../../ktest/arch/loongarch64/mod.rs"]
 pub(crate) mod tests;

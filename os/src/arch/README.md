@@ -14,7 +14,7 @@
 
 `trap/entry.S` 按 Rust 提供的字段偏移和字长保存异常上下文，`trap/return.S` 负责恢复上下文和用户态切换。用户异常返回 `run_user` 调用者，内核异常进入共享的 `crate::trap::handle_kernel`。
 
-测试代码及汇编探针放在 `trap/tests/` 中，仅在启用 `ktest` 时参与构建，由 `ktest::run` 按测试组列表调用。
+架构 trap 自检及汇编探针位于 `../ktest/arch/` 的对应架构目录，启动信息自检位于 `../ktest/boot/`。原所属模块通过显式路径声明测试以保留白盒访问，仅在启用 `ktest` 时参与构建，由 `ktest::run` 按测试组列表调用。
 
 当前特权级切换尚不提供用户地址空间隔离；平台约定和限制见[启动流程](../../../docs/architecture/boot.md)。
 

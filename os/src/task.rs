@@ -95,4 +95,5 @@ impl Task {
 }
 
 #[cfg(feature = "ktest")]
+#[path = "ktest/task/mod.rs"]
 pub(crate) mod tests;

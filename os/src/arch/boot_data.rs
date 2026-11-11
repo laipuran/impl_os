@@ -64,4 +64,5 @@ impl MappedFdt<'_> {
 }
 
 #[cfg(feature = "ktest")]
+#[path = "../ktest/boot/common/mod.rs"]
 pub(crate) mod tests;
