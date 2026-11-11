@@ -1,5 +1,6 @@
 //! 内核堆、启动期物理内存地图及物理页框分配。
 
+pub(crate) mod boot_memory;
 pub(crate) mod fdt;
 pub(crate) mod frame;
 pub(crate) mod heap;
@@ -53,7 +54,7 @@ pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static st
 /// # Panics
 ///
 /// 内核物理地址区间未完整包含在描述的 RAM 中时 panic。
-fn discover(mut memory: fdt::BootMemory) -> Result<regions::MemoryMap, &'static str> {
+fn discover(mut memory: boot_memory::BootMemory) -> Result<regions::MemoryMap, &'static str> {
     use crate::arch::boot;
     use regions::MemoryMap;
 

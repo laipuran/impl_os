@@ -3,7 +3,7 @@
 use core::slice;
 
 use crate::arch::boot_data::MappedFdt;
-use crate::mm::{fdt, regions::Region};
+use crate::mm::{boot_memory::BootMemory, regions::Region};
 
 mod tables;
 
@@ -26,7 +26,7 @@ const PHYSICAL_LIMIT: usize = 1 << 48;
 ///
 /// `boot_arg` 必须来自 QEMU virt direct boot 的 a2；入口汇编必须已建立
 /// DMW0，低端启动数据和配置表指向的完整 FDT 必须可读且不变。
-pub unsafe fn memory(boot_arg: usize) -> Result<fdt::BootMemory, &'static str> {
+pub unsafe fn memory(boot_arg: usize) -> Result<BootMemory, &'static str> {
     // SAFETY: QEMU direct boot 将完整的前 1 MiB 启动块放入低端 RAM；
     // DMW0 已由入口汇编建立，boot CPU 独占读取。
     let boot_info = unsafe { slice::from_raw_parts(DIRECT_MAP_BASE as *const u8, BOOT_INFO_SIZE) };
