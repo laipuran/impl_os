@@ -64,11 +64,13 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# [Container] Clippy on both bare-metal targets; no exported ELF files.
+# [Container] Clippy on both targets with default and ktest features; no exported ELF files.
 lint:
     make prepare-vendor
     cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target riscv64gc-unknown-none-elf -- -D warnings
     cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target loongarch64-unknown-none -- -D warnings
+    cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target riscv64gc-unknown-none-elf --features ktest -- -D warnings
+    cargo clippy --config cargo/config.toml --locked --offline -p impl-os --target loongarch64-unknown-none --features ktest -- -D warnings
 
 # [Container] Refresh committed dependency sources; may access the network.
 vendor:
