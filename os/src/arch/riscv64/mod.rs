@@ -3,6 +3,7 @@ use core::arch::{asm, global_asm};
 global_asm!(include_str!("entry.S"));
 
 pub(crate) mod boot;
+pub(crate) mod paging;
 pub(crate) mod syscall;
 pub(crate) mod trap;
 
@@ -10,7 +11,8 @@ pub(crate) const NAME: &str = "riscv64";
 
 pub(crate) fn putchar(byte: u8) {
     const UART: *mut u8 = 0x1000_0000 as *mut u8;
-    // SAFETY: QEMU virt maps a 16550 UART here; paging is still disabled.
+    // SAFETY: QEMU virt maps a 16550 UART here; an active page table must
+    // preserve this supervisor MMIO mapping.
     unsafe {
         while UART.add(5).read_volatile() & 0x20 == 0 {
             core::hint::spin_loop();

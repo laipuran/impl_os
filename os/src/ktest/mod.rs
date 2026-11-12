@@ -30,6 +30,11 @@ const SUITES: &[Suite] = &[
         name: "physical frames",
         run: crate::mm::frame::tests::kernel_test,
     },
+    #[cfg(target_arch = "riscv64")]
+    Suite {
+        name: "Sv39 paging",
+        run: crate::arch::paging::tests::kernel_test,
+    },
     Suite {
         name: "FDT memory",
         run: |_| crate::mm::fdt::tests::kernel_test(),
