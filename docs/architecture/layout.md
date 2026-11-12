@@ -31,7 +31,7 @@ _start (entry.S)
         │     │     └─> MappedFdt::from_raw() -> fdt::parse()
         │     ├─> discover() -> regions::MemoryMap::new()
         │     └─> frame::FrameAllocator::new()
-        ├─> ktest::run(&frames)          [仅 feature = "ktest"]
+        ├─> ktest::run()                 [仅 feature = "ktest"]
         └─> arch::shutdown()
 
 Task::run()

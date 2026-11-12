@@ -24,9 +24,9 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ### 组织方式与设计约定
 
-- **零生产侵入**：`ktest` 仅在启用 `--features ktest` 时参与编译。正常启动流程完成日志、Trap 和内存分配器初始化后，将 `FrameAllocator` 的共享引用传给 `ktest::run(&frames)`。
+- **启动入口**：`ktest` 仅在启用 `--features ktest` 时参与编译。日志、Trap 和内存分配器初始化后，启动入口调用无参数的 `ktest::run()`；需要真实页框的套件通过 `mm::frames()` 借用全局分配器。
 - **目录与白盒访问**：所有测试代码与专用汇编探针统一存放在 `os/src/ktest/` 下（按 `arch/`、`boot/`、`mm/`、`syscall/`、`task/` 分类），再由被测模块通过 `#[cfg(feature = "ktest")] #[path = "..."] mod tests;` 挂载。这样既保持了业务源码目录的整洁，又允许测试直接访问模块内部私有项。
-- **顺序执行与状态恢复**：`ktest::run` 按 `SUITES` 数组顺序依次执行各测试套件。每个套件在返回前必须恢复临时修改的硬件状态（如 LoongArch 的 `DMW1` 窗口）并归还借用的物理页框。任何断言失败都会直接触发内核 panic 并停机；只有全部套件通过才会打印最终的 `<arch>: all kernel tests passed`。
+- **顺序执行与状态恢复**：`ktest::run` 按 `SUITES` 数组顺序依次调用各套件的无参数、无返回值入口。每个套件在返回前必须恢复临时修改的硬件状态（如 LoongArch 的 `DMW1` 窗口）并归还借用的物理页框。任何断言失败都会直接触发内核 panic 并停机；只有全部套件通过才会打印最终的 `<arch>: all kernel tests passed`。
 - **注意 LoongArch 退出方式**：LoongArch 尚未实现主动关机，打印 `loongarch64: all kernel tests passed` 后会停在 `idle` 循环（需按 `Ctrl-a x` 退出）。判断自检是否通过必须以串口输出的成功标记为准，不能仅看 QEMU 是否退出。
 
 ---

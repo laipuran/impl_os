@@ -17,9 +17,11 @@ impl Bitmap {
     pub(super) fn new(total: usize) -> Result<Self, &'static str> {
         let words = total.div_ceil(WORD_BITS);
         let mut free = Vec::new();
+
         free.try_reserve_exact(words)
             .map_err(|_| "insufficient heap for frame bitmap")?;
         free.resize(words, usize::MAX);
+        
         if total % WORD_BITS != 0 {
             free[words - 1] = (1usize << (total % WORD_BITS)) - 1;
         }

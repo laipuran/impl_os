@@ -28,10 +28,10 @@ extern "C" fn kernel_main(boot_arg: usize) -> ! {
     trap::init();
     // SAFETY: 入口汇编已按各架构约定传入 `boot_arg` 并建立早期内存访问环境；
     // 当前运行在单核关中断状态下，启动信息与未分配的 RAM 均保持有效且不被并发修改。
-    let _frames = unsafe { mm::init(boot_arg) }.expect("memory initialization failed");
+    unsafe { mm::init(boot_arg) }.expect("memory initialization failed");
     log::info!("booted on {}", arch::NAME);
     #[cfg(feature = "ktest")]
-    ktest::run(&_frames);
+    ktest::run();
     arch::shutdown()
 }
 

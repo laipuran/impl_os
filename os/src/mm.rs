@@ -6,11 +6,28 @@ pub(crate) mod frame;
 pub(crate) mod heap;
 pub(crate) mod regions;
 
-/// 初始化内核静态堆、解析启动内存布局，并构建管理可用物理页的 [`frame::FrameAllocator`]。
+// 仅 init 写入一次，此后不移动或替换分配器；所有访问限于关闭中断的启动主核。
+// 分配器包含 RefCell；启用中断或多核前必须重新设计访问保护。
+static mut FRAMES: Option<frame::FrameAllocator> = None;
+
+/// 返回正常启动时建立的全局页框分配器。
 ///
-/// 必须在首次堆分配前调用，且只允许调用一次（即使后续内存发现报错，静态堆也已初始化，不支持重试）。
-/// 若扣除保留区并按页对齐后没有任何完整的可用物理页，仍会返回一个总容量为 0 的分配器，
-/// 由后续的页框分配调用按资源耗尽处理。
+/// 与其他内存管理操作一样，仅供关闭中断的启动主核使用。
+///
+/// # Panics
+///
+/// [`init`] 尚未成功完成时 panic。
+#[cfg_attr(not(feature = "ktest"), allow(dead_code))]
+pub fn frames() -> &'static frame::FrameAllocator {
+    // SAFETY: 仅关闭中断的启动主核可以访问；init 只在发布引用前写入一次，此后分配器及其堆元数据在内核整个生命周期内有效。
+    unsafe { (*core::ptr::addr_of!(FRAMES)).as_ref() }.expect("frame allocator not initialized")
+}
+
+/// 依次初始化内核堆、发现物理内存，并建立全局页框分配器。
+///
+/// 必须早于首次堆分配。成功后通过 [`frames`] 借用分配器；启动数据不回收。
+/// 初始化失败后不支持重试，因为内核堆已经初始化。
+/// 没有完整可用页时仍可成功初始化，分配器容量为零，由后续分配请求报告资源不足。
 ///
 /// # Errors
 ///
@@ -25,7 +42,7 @@ pub(crate) mod regions;
 /// - 仅可在关闭中断的启动主核上调用一次，不支持多核并发或中断重入。
 /// - `boot_arg` 必须是入口汇编按当前架构启动协议传入的参数；其指向的启动数据在初始化期间必须完整、可读且不被修改，
 ///   并且当前架构已建立访问该启动数据所需的地址映射（如 RISC-V 物理直通或 LoongArch `DMW0`）。
-pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static str> {
+pub unsafe fn init(boot_arg: usize) -> Result<(), &'static str> {
     heap::init();
 
     // SAFETY: 调用方已保证 `boot_arg`、启动数据存储及当前架构的早期映射有效。
@@ -40,7 +57,9 @@ pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static st
         frames.available()
     );
 
-    Ok(frames)
+    // SAFETY: 调用方保证仅关闭中断的启动主核运行；heap::init 拒绝重复初始化，此前尚未发布分配器引用。写入后分配器始终留在原处。
+    unsafe { core::ptr::addr_of_mut!(FRAMES).write(Some(frames)) };
+    Ok(())
 }
 
 /// 将内核镜像自身占用的物理区间加入保留列表，并生成归一化后的 [`regions::MemoryMap`]。
