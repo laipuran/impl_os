@@ -70,6 +70,18 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 - **`FDT memory` & `boot FDT mapping`**：使用 [`os/src/ktest/support/fdt.rs`](../../os/src/ktest/support/fdt.rs) 独立编码生成的测试设备树，验证多段 RAM、`1`/`2` cell 宽度、`status = "disabled"` 节点跳过、`initrd` 保留、FDT 本体物理区间保留，对截断、块重叠、非法魔数/版本、动态保留区、超深嵌套（> 32 层）的错误拦截，以及对整份 DTB 逐字节按位取反（`^= 0xff`）时解析器绝不 panic。
 - **`boot tables`（仅 LoongArch）**：在合成的字节数组上验证 EFI 系统表签名、乱序 GUID 查找（FDT 与 initrd）、重复/缺失表项报错、地址越界拦截以及 `DMW0` 映射地址转换。
 
+### 3.4 RISC-V Sv39 页表测试（`Sv39 paging`）
+
+`just test rv` 和 `just test rv debug` 在物理页框测试后执行此测试组。测试与前序 Trap 测试的机器状态无关，源码及探针位于 [`os/src/ktest/arch/riscv64/paging/`](../../os/src/ktest/arch/riscv64/paging/)。
+
+- 软件映射覆盖同表多页、2 MiB / 1 GiB 分界、Sv39 正负规范地址边界、页内偏移、物理地址零和 56 位上界，并验证拒绝非规范地址、未对齐地址、非法权限和重复映射。
+- 解除映射验证共享表保留、空中间表立即回收、重复解除返回错误，以及销毁非空页表后页框数恢复。
+- 从真实页框借出 0 至 4 页建立小池，验证根表及中间分支耗尽、部分分配回滚、已有映射保持不变，避免耗尽启动分配器。
+- 临时启用 Sv39，恒等映射内核镜像、页表页和 UART，另映射独占用户代码、数据和栈页。用户探针读写数据及栈后通过 `exit` 返回；未映射读取、用户读取监管态页面、写只读代码及从不可执行数据页取指产生对应的用户页故障。
+- 返回后检查原 `satp` 和用户数据；将同一虚拟地址重新映射到另一物理页后激活，验证 TLB 使用新翻译。整组结束时页框数恢复。
+
+活动期间输出 `riscv64: Sv39 active`，通过后输出 `riscv64: Sv39 paging kernel tests passed`；整次自检仍以总成功标记为准。测试中的内核镜像使用监管态 RWX 临时映射，覆盖分页下的内核执行和固定用户探针，不代表最终内核权限布局，也不覆盖 LoongArch 页表、ELF 加载、通用用户地址空间、大页或多核失效。
+
 ---
 
 ## 4. 手动检查与故障注入验证
