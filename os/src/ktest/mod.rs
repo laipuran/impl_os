@@ -5,26 +5,24 @@ pub(crate) mod user_env;
 
 use user_env::UserEnv;
 
-use crate::mm::frame::FrameAllocator;
-
 struct Suite {
     name: &'static str,
-    run: fn(&FrameAllocator),
+    run: fn(),
 }
 
 // 将测试套件选择与运行器及正常启动路径分离。
 const SUITES: &[Suite] = &[
     Suite {
         name: "user execution",
-        run: |_| user_execution(),
+        run: user_execution,
     },
     Suite {
         name: "heap",
-        run: |_| crate::mm::heap::tests::kernel_test(),
+        run: crate::mm::heap::tests::kernel_test,
     },
     Suite {
         name: "physical regions",
-        run: |_| crate::mm::regions::tests::kernel_test(),
+        run: crate::mm::regions::tests::kernel_test,
     },
     Suite {
         name: "physical frames",
@@ -37,16 +35,16 @@ const SUITES: &[Suite] = &[
     },
     Suite {
         name: "FDT memory",
-        run: |_| crate::mm::fdt::tests::kernel_test(),
+        run: crate::mm::fdt::tests::kernel_test,
     },
     Suite {
         name: "boot FDT mapping",
-        run: |_| crate::arch::boot_data::tests::kernel_test(),
+        run: crate::arch::boot_data::tests::kernel_test,
     },
     #[cfg(target_arch = "loongarch64")]
     Suite {
         name: "boot tables",
-        run: |_| crate::arch::boot::tests::kernel_test(),
+        run: crate::arch::boot::tests::kernel_test,
     },
 ];
 
@@ -67,14 +65,14 @@ fn user_execution() {
 
 /// 正常初始化后，按声明顺序运行配置的测试套件。
 ///
-/// `frames` 是正常启动流程初始化的页框分配器，供测试借用，不重复初始化。
+/// 需要真实页框的套件通过 [`crate::mm::frames`] 借用全局分配器，不重复初始化。
 /// 在禁用中断的 boot CPU 上调用。各套件必须在返回前恢复临时映射和机器状态；
 /// 断言失败会通过内核 panic handler 停机，
 /// 因此不会打印最终成功标记。
-pub fn run(frames: &FrameAllocator) {
+pub fn run() {
     for suite in SUITES {
         crate::println!("{}: running {} tests", crate::arch::NAME, suite.name);
-        (suite.run)(frames);
+        (suite.run)();
     }
     crate::println!("{}: all kernel tests passed", crate::arch::NAME);
 }

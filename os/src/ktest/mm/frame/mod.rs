@@ -157,7 +157,9 @@ fn boot_allocator(frames: &FrameAllocator) {
 }
 
 /// 验证真实启动页框的分配回收，以及合成区间的耗尽、边界和保留组合。
-pub fn kernel_test(frames: &FrameAllocator) {
+pub fn kernel_test() {
+    let frames = crate::mm::frames();
+    assert!(core::ptr::eq(frames, crate::mm::frames()));
     boot_allocator(frames);
     disjoint_regions_and_recycling();
     bitmap_boundaries();

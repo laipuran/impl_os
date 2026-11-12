@@ -330,7 +330,8 @@ fn hardware_translation(frames: &FrameAllocator) {
 }
 
 /// 验证 Sv39 软件映射及真实地址翻译，每轮返回前恢复 bare 并释放全部页框。
-pub fn kernel_test(frames: &FrameAllocator) {
+pub fn kernel_test() {
+    let frames = crate::mm::frames();
     let available = frames.available();
     mapping_and_recycling(frames);
     invalid_inputs(frames);
