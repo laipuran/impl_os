@@ -1,3 +1,5 @@
+//! 基于串口控制台的 `log` 实现。
+
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
 
 struct Logger;
@@ -23,6 +25,7 @@ impl Log for Logger {
     fn flush(&self) {}
 }
 
+/// 注册全局串口日志器，并将默认日志级别设为 `Info`。
 pub fn init() -> Result<(), SetLoggerError> {
     log::set_logger(&LOGGER)?;
     log::set_max_level(LevelFilter::Info);

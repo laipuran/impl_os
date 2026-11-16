@@ -1,3 +1,5 @@
+//! 早期串口控制台输出与格式化宏。
+
 use core::fmt::{self, Write};
 
 struct Console;
@@ -14,11 +16,14 @@ impl Write for Console {
     }
 }
 
-// Boot-only console: concurrent writers and interrupt contexts are not yet supported.
+/// 向架构早期串口输出格式化文本。
+///
+/// 当前仅供单核关中断环境使用，尚未加锁保护并发或中断重入。
 pub fn print(args: fmt::Arguments<'_>) {
     Console.write_fmt(args).unwrap();
 }
 
+/// 向早期串口打印一行格式化文本。
 #[macro_export]
 macro_rules! println {
     ($($arg:tt)*) => {

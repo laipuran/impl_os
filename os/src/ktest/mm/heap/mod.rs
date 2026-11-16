@@ -1,4 +1,4 @@
-//! 通过 Rust 集合验证全局堆，并用独立堆验证耗尽与伙伴合并。
+//! 内核堆分配器自检：验证全局堆的动态容器分配回收，以及独立测试池上的对齐、耗尽与伙伴块合并。
 
 use alloc::{boxed::Box, vec::Vec};
 use core::{alloc::Layout, ptr::NonNull};
@@ -34,7 +34,7 @@ fn assert_collections() {
     }
     assert_eq!(ALLOCATOR.lock().stats_alloc_actual(), before);
 
-    // 同一容量反复申请和释放，不应持续消耗堆空间。
+    // 反复申请并释放相同容量的 `Vec`，验证堆空间可正常回收复用。
     for _ in 0..32 {
         let mut values = Vec::<u8>::new();
         values.try_reserve_exact(8192).unwrap();
@@ -66,13 +66,13 @@ fn assert_layouts(heap: &mut Heap<HEAP_ORDER>, start: usize) {
                 "heap allocations overlap",
             );
         }
-        // SAFETY: 分配成功且仍未释放；在申请长度内写入，不访问空闲块元数据。
+        // SAFETY: 块刚成功分配且未释放，仅在申请的 `layout.size()` 字节范围内填充测试数据。
         unsafe { ptr.as_ptr().write_bytes(index as u8 + 1, layout.size()) };
         allocations[index] = Some(ptr);
     }
     for (index, layout) in layouts.iter().enumerate() {
         let ptr = allocations[index].unwrap();
-        // SAFETY: 当前块仍由本测试独占，整个申请区间已初始化。
+        // SAFETY: 该块仍由当前测试独占且已完成初始化，读取完毕后立即归还给测试堆。
         let bytes = unsafe { core::slice::from_raw_parts(ptr.as_ptr(), layout.size()) };
         assert!(bytes.iter().all(|&value| value == index as u8 + 1));
         heap.dealloc(ptr, *layout);
@@ -103,18 +103,15 @@ fn assert_exhaustion_and_merge(heap: &mut Heap<HEAP_ORDER>, start: usize) {
     assert_eq!(heap.stats_total_bytes(), 8192);
 }
 
-/// 检查已初始化的全局堆，以及独立测试堆的布局、回收和耗尽行为。
-///
-/// 仅由关闭中断的 boot CPU 顺序执行一次；所有申请在返回前释放。
+/// 验证全局静态堆的容器分配，并在 8 KiB 独立测试池上验证多对齐分配、耗尽报错与伙伴块合并。
 pub(crate) fn kernel_test() {
     assert_eq!(ALLOCATOR.lock().stats_total_bytes(), HEAP_SIZE);
     assert_collections();
 
-    // SAFETY: 仅获取测试独占静态数组的裸地址，不创建引用或访问其内容。
+    // SAFETY: 仅获取测试专用静态数组 `TEST_SPACE` 的起始地址。
     let start = unsafe { core::ptr::addr_of_mut!(TEST_SPACE.0) as *mut u8 as usize };
     let mut heap = Heap::<HEAP_ORDER>::empty();
-    // SAFETY: 测试静态空间独立于全局堆且按 8192 字节对齐；本测试独占它，
-    // 仅初始化一次，并在返回前释放所有块，不向外泄露指针或引用。
+    // SAFETY: `TEST_SPACE` 独立于全局堆且按 8192 字节对齐；仅在本函数内初始化一次并在返回前释放全部块。
     unsafe { heap.init(start, 8192) };
     assert_layouts(&mut heap, start);
     assert_exhaustion_and_merge(&mut heap, start);

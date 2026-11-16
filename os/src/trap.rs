@@ -1,19 +1,19 @@
-//! Trap 初始化与内核致命异常处理策略。
+//! 异常入口初始化与内核态 Trap 处理。
 //!
-//! 用户异常从架构的 `run_user` 返回，并保留保存的 frame；
-//! 不进入此内核异常处理函数。
+//! 用户态触发的异常和系统调用会直接从 [`crate::arch::trap::run_user`] 返回给调用方，
+//! 不会进入本模块的 [`handle_kernel`]。
 
 use crate::arch::trap::{self, TrapContext};
 
-/// 在进入用户代码前安装 boot CPU 的异常入口。
+/// 初始化当前主核的异常向量与 Trap 控制寄存器。
 pub fn init() {
     trap::init();
 }
 
-/// 处理执行内核代码时发生的异常。
+/// 处理内核态执行期间触发的异常或中断。
 ///
-/// 中断保持禁用。目前尚无 scheduler 或可恢复的内核异常策略；
-/// 意外 trap 会报告保存的机器状态，并通过 panic 停机。
+/// 当前内核全程保持中断关闭，且不具备可恢复的内核缺页处理机制；
+/// 除 `ktest` 注册的已知测试探针外，任何内核态异常都会打印异常原因、PC、状态/原因 CSR、故障地址与 SP 等诊断信息并 panic 停机。
 pub fn handle_kernel(context: &mut TrapContext) {
     #[cfg(feature = "ktest")]
     if trap::tests::handle_kernel_test(context) {

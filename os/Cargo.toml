@@ -11,7 +11,7 @@ test = false
 bench = false
 
 [features]
-# 显式启用启动时检查；默认不得放宽用户态映射权限。
+# 启用启动期内核白盒自检套件（仅用于测试，默认构建不开启）。
 ktest = []
 
 [dependencies]

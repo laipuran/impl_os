@@ -1,11 +1,8 @@
-//! 解码 RV64 `scause` 中相互独立的中断码与异常码。
+//! RISC-V 64 `scause` 寄存器解码：区分异步中断与同步异常。
 
 use thiserror::Error;
 
-/// 根据 `scause` 最高位的中断标志对监管态陷阱分类。
-///
-/// 未知原因码保留中断标志以外的全部位，便于诊断。
-/// 此分类不表示陷阱可以恢复，也不决定返回地址的调整策略。
+/// 根据 `scause` 最高位（Interrupt bit）分类的 S-mode Trap 原因。
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum TrapCause {
     #[error("interrupt: {0}")]
@@ -15,7 +12,7 @@ pub enum TrapCause {
 }
 
 impl TrapCause {
-    /// 解码原始 `scause`，仅移除架构定义的中断标志位。
+    /// 解码原始 `scause` 值，根据最高位拆分为中断或同步异常。
     pub fn from_scause(scause: usize) -> Self {
         let interrupt_bit = 1usize << (usize::BITS - 1);
         let code = scause & !interrupt_bit;
@@ -27,7 +24,7 @@ impl TrapCause {
     }
 }
 
-/// 监管态中断码；无法识别的原因码会完整保留。
+/// S-mode 中断原因码（未识别的编码保留在 `Unknown` 中）。
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum InterruptCause {
     #[error("supervisor software interrupt")]
@@ -51,9 +48,7 @@ impl From<usize> for InterruptCause {
     }
 }
 
-/// 同步异常码，与中断码使用不同的编号空间。
-///
-/// 未在此列出的保留码和扩展专用码统一保留为 `Unknown`。
+/// S-mode 同步异常原因码（未识别的编码保留在 `Unknown` 中）。
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ExceptionCause {
     #[error("instruction address misaligned")]

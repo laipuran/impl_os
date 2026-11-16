@@ -1,19 +1,19 @@
-//! 空闲页位图及非空字索引；不访问物理地址，也不依赖地址区间布局。
+//! 空闲页框位图与非空位图字索引栈。
 
 use alloc::vec::Vec;
 
 use super::WORD_BITS;
 
 pub(super) struct Bitmap {
-    // 置位表示空闲；尾部不对应物理页的位始终为零。
+    // 1 表示空闲，0 表示已分配；末尾不足一个机器字的无效高位恒置为 0。
     free: Vec<usize>,
-    // 每个非零位图字恰好出现一次，最后一个索引是下一次分配的候选字。
+    // 记录当前非零位图字下标的索引栈：每个非零字恰好在栈中出现一次，分配时直接取栈顶字。
     nonempty: Vec<usize>,
     available: usize,
 }
 
 impl Bitmap {
-    /// 建立全空闲位图，并一次性预留所有非空字索引槽。
+    /// 初始化全空闲位图，并预先分配好容纳全部位图字所需的索引栈空间。
     pub(super) fn new(total: usize) -> Result<Self, &'static str> {
         let words = total.div_ceil(WORD_BITS);
         let mut free = Vec::new();
@@ -41,7 +41,7 @@ impl Bitmap {
         self.available
     }
 
-    /// 从索引栈顶的非空字取一页；字耗尽时移除其索引。
+    /// 从索引栈顶的非零位图字中分配一个空闲位；若该字就此耗尽则将其弹出索引栈。
     pub(super) fn alloc(&mut self) -> Option<usize> {
         if self.available == 0 {
             return None;
@@ -64,14 +64,14 @@ impl Bitmap {
         Some(word * WORD_BITS + bit)
     }
 
-    /// 归还此前从本位图分配且尚未回收的页索引。
+    /// 归还先前由本位图分配出的页下标。
     pub(super) fn dealloc(&mut self, index: usize) {
         let word: usize = index / WORD_BITS;
         let mask = 1usize << (index % WORD_BITS);
         debug_assert_eq!(self.free[word] & mask, 0);
         if self.free[word] == 0 {
-            // 只有空字变为非空字时才入栈；每个字至多一个索引，预留容量足够，
-            // 因而回收不触发堆分配，也不重复加入已经存在的索引。
+            // 仅当该位图字从全 0 恢复为非 0 时才压入索引栈，既避免栈中出现重复下标，
+            // 又保证元素数量永不超过构造时预留的 `words` 容量，回收过程绝不触发堆重分配。
             self.nonempty.push(word);
         }
         self.free[word] |= mask;

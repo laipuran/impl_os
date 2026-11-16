@@ -1,3 +1,5 @@
+//! RISC-V 64 架构支持（QEMU `virt` 平台，S-mode）。
+
 use core::arch::{asm, global_asm};
 
 global_asm!(include_str!("entry.S"));
@@ -10,7 +12,8 @@ pub(crate) const NAME: &str = "riscv64";
 
 pub(crate) fn putchar(byte: u8) {
     const UART: *mut u8 = 0x1000_0000 as *mut u8;
-    // SAFETY: QEMU virt maps a 16550 UART here; paging is still disabled.
+    // SAFETY: QEMU `virt` 在物理地址 `0x1000_0000` 处映射了 NS16550A 兼容 UART，
+    // 当前内核运行在物理直通模式（`satp = Bare`），可直接通过 volatile 读写该 MMIO 寄存器。
     unsafe {
         while UART.add(5).read_volatile() & 0x20 == 0 {
             core::hint::spin_loop();
@@ -20,8 +23,8 @@ pub(crate) fn putchar(byte: u8) {
 }
 
 pub(crate) fn shutdown() -> ! {
-    // SAFETY: SBI v0.2 system reset, shutdown type, no error reason.
-    // The firmware may return SBI_ERR_NOT_SUPPORTED; park if it does.
+    // SAFETY: 调用 SBI v0.2 System Reset 扩展（EID = 0x53525354，FID = 0）请求关机；
+    // 若固件不支持该扩展而返回，则回退到下方的 `halt()` 挂起 CPU。
     unsafe {
         asm!(
             "ecall",
@@ -37,7 +40,7 @@ pub(crate) fn shutdown() -> ! {
 
 pub(crate) fn halt() -> ! {
     loop {
-        // SAFETY: boot runs in supervisor mode; interrupts remain disabled.
+        // SAFETY: 当前运行在 S-mode 且全局中断已关闭，执行 `wfi` 让当前核休眠等待。
         unsafe { asm!("wfi", options(nomem, nostack)) };
     }
 }

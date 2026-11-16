@@ -2,16 +2,16 @@
 .globl _start
 _start:
     csrci sstatus, 2
-    # Initial scaffold uses hart 0 only. SMP support is a later milestone.
+    # 当前仅使用 hart 0 启动内核，其余从核直接进入 `.Lpark` 休眠等待。
     bnez a0, .Lpark
     .option push
     .option norelax
     la gp, __global_pointer$
     .option pop
-    # 内核 ABI 不使用 TLS；异常入口恢复此固定的内核 tp。
+    # 内核不使用线程局部存储（TLS），将 `tp` 固定清零（Trap 入口也会恢复此约定）。
     li tp, 0
     la sp, boot_stack_top
-    # 共享入口只接收一个架构启动参数：RV 将 FDT 物理地址放入 a0。
+    # OpenSBI 通过 `a1` 传入 FDT 物理地址；将其移入 `a0` 作为 `kernel_main(boot_arg)` 的唯一参数。
     mv a0, a1
     tail kernel_main
 .Lpark:

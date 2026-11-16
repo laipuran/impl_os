@@ -1,14 +1,14 @@
 .section .text.entry
 .globl _start
 _start:
-    # PLV0, cached direct-map window for virtual addresses starting with 0x9.
+    # 配置 DMW0（CSR 0x180）：虚拟地址以 `0x9` 开头时，在 PLV0 下进行可缓存（CC=1）直接地址映射。
     li.d $t0, 0x9000000000000011
     csrwr $t0, 0x180
-    # QEMU enters at the physical address. Temporarily map segment 0 as well,
-    # so enabling paging does not fault before we jump into the high window.
+    # QEMU 从物理地址进入 `_start`；先用 DMW1（CSR 0x181）临时恒等映射 `0x0` 段，
+    # 确保下一条开启分页（PG=1）的指令到跳转入高地址窗口前仍能正常取指。
     li.w $t0, 0x11
     csrwr $t0, 0x181
-    # CRMD: PLV0, interrupts off, paging on, cached data/instruction accesses.
+    # 配置 CRMD（CSR 0x0）：PLV0，关闭中断（IE=0），开启映射地址翻译模式（DA=0, PG=1），指令/数据访问可缓存。
     li.w $t0, 0xb0
     csrwr $t0, 0x0
     la.local $t0, .Lmapped
@@ -16,14 +16,14 @@ _start:
     or $t0, $t0, $t1
     jirl $zero, $t0, 0
 .Lmapped:
+    # 已进入 DMW0 高地址窗口，卸载临时的低地址 DMW1 映射。
     csrwr $zero, 0x181
     csrrd $t0, 0x20
     bnez $t0, .Lpark
     la.local $sp, boot_stack_top
-    # 未安装 TLS；异常初始化保留此内核 ABI 的 tp。
+    # 内核不使用 TLS，将 `$tp` 清零（后续 `trap::init` 会将其备份到 `SAVE3`）。
     move $tp, $zero
-    # QEMU direct boot 的 a2 是 system table 物理地址，不是 FDT 地址。
-    # 共享入口只接收一个架构启动参数；启动信息由 arch::boot 解释。
+    # QEMU direct boot 通过 `$a2` 传入 EFI 系统表物理地址；将其移入 `$a0` 传给 `kernel_main(boot_arg)`。
     move $a0, $a2
     b kernel_main
 .Lpark:

@@ -1,21 +1,31 @@
-# 架构与平台边界
+# 架构抽象层（`arch`）
 
-`arch` 为共享内核代码提供平台操作、启动信息和异常处理接口。Rust target 决定使用哪个架构模块；共享代码通过 `arch` 调用所选实现，不应直接引用另一个架构。
+`arch` 模块将硬件平台差异隔离在架构边界内，按当前编译 target（`riscv64` 或 `loongarch64`）向内核上层导出统一的接口。共享内核代码应始终通过 `crate::arch` 访问硬件能力，避免在业务模块中散落 `#[cfg(target_arch = ...)]`。
 
-- `mod.rs`：按 Rust target 导出所选架构。
-- `riscv64/`：QEMU virt、S-mode 入口、链接地址、SBI 和早期 UART。
-- `loongarch64/`：QEMU virt、PLV0/DMW 启动、链接地址和早期 UART；平台关机未实现。
+## 导出接口
 
-两个架构由门面显式导出同一组接口：`NAME`、`putchar`、`shutdown`、`halt`、`boot::{memory, kernel_region}`、syscall ABI 和 `trap::{init, TrapContext, run_user}`；自检入口仅在启用 `ktest` 时可用。入口汇编按 C ABI 将平台启动参数传给 `kernel_main`，`boot` 模块负责解释启动协议并转换地址。UART 地址由 QEMU virt 平台确定：RISC-V 直接访问物理地址，LoongArch 经 DMW0 访问。
+`mod.rs` 对外导出以下统一接口：
 
-`boot_data.rs` 供两架构复用：`MappedFdt::from_raw` 在明确的可读性和有效期前提下借用原始启动存储，随后通过安全接口解析并记录 FDT 本体占用。`mm::fdt` 只处理字节切片，不负责裸地址或平台映射；平台额外的启动块和 initrd 保留仍由各自的 `boot` 模块追加。
+- 基础平台操作：`NAME`（架构名称字符串）、`putchar`（早期串口单字节输出）、`shutdown`（正常关机）、`halt`（死循环挂起当前核）。
+- 启动信息提取：`boot::memory(boot_arg)`（解析启动参数中的 RAM 与保留区）和 `boot::kernel_region()`（获取内核镜像占用的物理地址区间）。
+- 系统调用寄存器约定：`syscall::{NUMBER_REGISTER, ARGUMENT_START, is_syscall}`。
+- Trap 与特权级切换：`trap::{init, TrapContext, run_user}`。
 
-各架构的 `trap/mod.rs` 定义整数上下文，通过共用的方法提供 PC/GPR 编辑和异常信息读取。上下文字段保持私有，内部使用硬件寄存器名称；`trap/cause.rs` 负责解析异常原因，并用 `thiserror` 声明显示描述，处理策略由调用者决定。
+## 子模块说明
 
-`trap/entry.S` 按 Rust 提供的字段偏移和字长保存异常上下文，`trap/return.S` 负责恢复上下文和用户态切换。用户异常返回 `run_user` 调用者，内核异常进入共享的 `crate::trap::handle_kernel`。
+- `riscv64/`：面向 QEMU `virt`（S-mode 启动），通过 OpenSBI 执行关机，直接用物理地址访问 16550 UART。
+- `loongarch64/`：面向 QEMU `virt` 直接加载 ELF 启动（PLV0），在入口汇编中配置 `DMW0`（`0x9000_0000_0000_0000`）高地址直接映射窗口，通过 QEMU 传入的 EFI 系统表定位设备树（FDT）与 initrd。
+- `boot_data.rs`：双架构共用的 FDT 原始内存借用封装 `MappedFdt`。负责将“从裸指针验证头部与容量上限并构造切片”的 `unsafe` 操作集中在一处，随后交由纯安全的 `mm::fdt` 解析，并自动将 FDT 自身占用的物理区间加入保留列表。
 
-架构 trap 自检及汇编探针位于 `../ktest/arch/` 的对应架构目录，启动信息自检位于 `../ktest/boot/`。原所属模块通过显式路径声明测试以保留白盒访问，仅在启用 `ktest` 时参与构建，由 `ktest::run` 按测试组列表调用。
+## Trap 与上下文切换设计
 
-当前特权级切换尚不提供用户地址空间隔离；平台约定和限制见[启动流程](../../../docs/architecture/boot.md)。
+两个架构的 `trap/` 目录结构一致：
 
-`syscall.rs` 提供 Linux 调用号和参数的寄存器位置及用户 syscall 来源判断，供共享 `crate::syscall` 解码和写回结果。
+- `trap/mod.rs`：定义保存通用寄存器与关键异常 CSR 的 `TrapContext`，提供访问 PC、SP、通用寄存器和异常原因的统一方法。结构体字段保持私有，防止外部直接篡改特权级或中断状态位。
+- `trap/cause.rs`：将架构异常寄存器（RISC-V 的 `scause`、LoongArch 的 `ESTAT` 及软件标记的 TLB 重填）解码为结构化的 `TrapCause` 枚举。
+- `trap/entry.S` 与 `trap/return.S`：实现内核态 Trap 与用户态往返切换（`run_user`）。
+  - 执行 `run_user` 时，先把当前内核调用栈的被调用者保存寄存器存入栈帧，再加载 `TrapContext` 降权进入用户态。
+  - 用户态触发任何异常或系统调用时，汇编直接把用户寄存器写回调用方传入的 `TrapContext`，随后恢复内核被调用者保存寄存器并从 `run_user` 返回。
+  - 内核态触发异常时，在当前内核栈上开辟对齐的 `TrapContext` 栈帧，调用 `crate::trap::handle_kernel`。
+
+关于各架构的寄存器约定、内存映射现状及安全前提，详见 [`docs/architecture/boot.md`](../../../docs/architecture/boot.md)。

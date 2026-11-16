@@ -1,9 +1,15 @@
-# Rust 内核
+# `impl-os` 内核 Crate
 
-`src/main.rs` 是共享 Rust 入口；`src/arch/` 提供两架构的入口汇编、链接布局、trap 上下文及特权级切换、早期串口和停机操作。`build.rs` 按 target 选链接脚本，避免依赖可能被评测过滤的隐藏配置。
+本目录是内核的 Rust 实现。请从仓库根目录执行 `make all` 或 `just` 命令进行编译，不要在此目录下单独执行无 target 的 `cargo build`。
 
-当前执行流程为 BSS 清零、日志、trap 与内核堆初始化、启动输出、调用架构停机入口。`src/trap.rs` 定义共享内核异常策略；启用 `ktest` 时，由 `src/ktest/mod.rs` 的统一入口按具名测试组列表执行各模块自检。测试源码和探针按功能集中在 `src/ktest/`，由所属模块显式声明以保留白盒访问；基础能力的初始化不依赖自检。接口约束及未实现的内存隔离见 `docs/architecture/boot.md`。
+## 代码概览
 
-`src/syscall.rs` 实现共享 Linux syscall ABI 和最小调用分发，架构寄存器约定位于 `src/arch/*/syscall.rs`。`src/task.rs` 的任务独占整数现场，沿用 `run_user` 同步执行到退出或未处理的用户陷阱；`exit/exit_group` 保存低八位退出码，其他调用返回 `-ENOSYS`。`ktest` 在可信用户映射中验证完整执行循环。当前没有 ELF 装载器、用户地址空间或调度器，正常启动不创建用户任务。
+- `build.rs`：根据当前编译目标（`riscv64` 或 `loongarch64`）向链接器传入对应的 `linker.ld` 与 `--no-relax` 参数。
+- `src/main.rs`：内核 Rust 入口 `kernel_main`。启动时依次清零 BSS、初始化日志与异常入口、初始化内核堆与物理内存分配器；若开启了 `ktest` 特性则运行内核自检，最后调用关机接口。
+- `src/arch/`：架构相关实现，封装启动汇编、早期串口输出、关机/停机、Trap 上下文保存恢复及系统调用寄存器约定（详见 [`src/arch/README.md`](src/arch/README.md)）。
+- `src/mm/`：内存管理模块，包含基于静态 BSS 的伙伴系统堆（`heap`）、设备树内存解析（`fdt`）、物理地址区间整理（`regions`）以及基于位图的 4 KiB 物理页框分配器（`frame`）。
+- `src/trap.rs`：共享的内核态异常处理入口。用户态触发的 Trap 会直接从 `arch::trap::run_user` 返回给调用方，而内核态意外触发的 Trap 会在此打印现场并 panic 停机。
+- `src/syscall.rs` 与 `src/task.rs`：Linux 系统调用分发与最小任务执行循环。`Task` 封装单次同步的用户态执行上下文，目前支持 `exit`（93）和 `exit_group`（94），未实现的调用统一返回 `-ENOSYS`。
+- `src/ktest/`：由 `ktest` feature 启用的启动期白盒自检套件，覆盖 Trap 上下文切换、系统调用 ABI、任务生命周期、内核堆、设备树解析与物理页框分配。
 
-在仓库根执行 `make all`，不在这里维护第二套 Makefile。依赖、模块边界和物理/虚拟地址约定见 `docs/architecture/`。
+当前内核尚未实现用户页表、地址空间隔离、ELF 加载器与多任务调度，具体架构设计见 [`docs/architecture/`](../docs/architecture/layout.md)。

@@ -1,4 +1,4 @@
-//! 在统一测试层提供的可信用户执行环境中验证 syscall ABI。
+//! Linux 系统调用 ABI 自检：验证调用号与 6 个参数提取、返回值写回、PC 前移与边界溢出拦截。
 
 use core::arch::global_asm;
 
@@ -21,12 +21,12 @@ extern "C" {
     fn syscall_test_done();
 }
 
-/// 返回探针的内核地址；调用者按当前用户映射转换为用户入口。
+/// 返回系统调用测试探针的内核地址（由调用方通过 `UserEnv::address` 转换为用户态入口地址）。
 pub fn entry() -> usize {
     syscall_test_entry as *const () as usize
 }
 
-/// 不能作为用户 syscall 处理的现场必须被拒绝，且 PC、整数状态及异常信息不变。
+/// 验证非用户态系统调用的 `context` 会被 [`decode`] 与 [`complete`] 拒绝且现场保持原样。
 pub fn assert_rejected(context: &mut TrapContext) {
     let registers = *context.registers();
     let metadata = (
@@ -57,7 +57,7 @@ fn assert_completion_boundary(context: &mut TrapContext) {
         context.raw_cause(),
         context.bad_addr(),
     );
-    // 只修改已捕获的 syscall 现场，不实际执行这些机器字边界地址。
+    // 在已捕获的系统调用上下文上直接测试 `usize::MAX` 附近的 PC 边界（不实际跳转到该边界地址执行）。
     context.set_pc(usize::MAX - 7);
     assert!(complete(context, -38));
     assert_eq!(context.pc(), usize::MAX - 3);
@@ -76,22 +76,21 @@ fn assert_completion_boundary(context: &mut TrapContext) {
         ),
         metadata,
     );
-    // 恢复真实探针现场，后续继续执行终止 breakpoint。
+    // 还原探针的真实现场，以便后续继续执行到末尾的 `syscall_test_done` 断点。
     context.set_pc(pc);
     *context.registers_mut() = registers;
 }
 
-/// 执行三次连续用户 syscall，验证完整参数、结果可见性和异常拒绝。
+/// 连续执行 3 次用户态系统调用，验证参数解码、返回值写回、PC 前移及异常拒绝行为。
 ///
 /// # Safety
-/// 调用者须满足 [`run_user`] 的前提；`user_entry` 必须是 [`entry`] 在用户
-/// 执行环境中的可执行地址，完整探针须可取指，且保持各标签相对入口的偏移。
-/// 提供 16 字节对齐的可写用户栈，并保持中断关闭。
-/// 仅可在单 CPU 自检中使用，不提供用户隔离。
+///
+/// - 调用方必须满足 [`run_user`] 的安全前提；
+/// - `user_entry` 必须是 [`entry`] 在当前 `UserEnv` 映射下的可执行地址，且 `stack` 为 16 字节对齐的独占用户栈顶。
 pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
     let mut context = TrapContext::user(user_entry, stack);
     let mut args = [usize::MAX, 0x102, 0x203, 0x304, 0x405, 1usize << 63];
-    // 成功值超过 32 位，错误值为负数；均须完整返回用户寄存器。
+    // 覆盖超过 32 位的正返回值与负 errno，确保 64 位寄存器完整写回。
     let success = 0x1_2345_6789isize;
     #[cfg(target_arch = "riscv64")]
     let result_register = 10;
@@ -106,8 +105,7 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
         (syscall_test_second as *const () as usize, 0x456, -38),
         (syscall_test_third as *const () as usize, 0x789, 0),
     ] {
-        // SAFETY: 调用者提供映射与私有栈；固定探针只操作寄存器并触发 trap，
-        // 不访问或修改暂停的内核现场。
+        // SAFETY: 用户探针与测试栈均已映射；探针仅设置寄存器并执行系统调用指令，不触碰内核内存。
         unsafe { run_user(&mut context) };
         let pc = user_entry + (trap - entry());
         assert_eq!(context.pc(), pc);
@@ -133,12 +131,11 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
             ),
             metadata,
         );
-        // 前两次用户恢复后，探针将返回值复制到下一次调用的第六参数，
-        // 证明用户观察到了结果、其余参数未被破坏，且 PC 没有停留在原 syscall。
+        // 汇编探针从系统调用返回后会将 `a0` 移入 `a5`（第 6 个参数），以此验证用户态实际观测到了返回值。
         args[5] = result as usize;
     }
     assert_completion_boundary(&mut context);
-    // SAFETY: 最后一次完成后继续执行固定探针，必须到达终止 breakpoint。
+    // SAFETY: 完成第 3 次系统调用后恢复执行，探针将直接执行末尾的断点指令返回。
     unsafe { run_user(&mut context) };
     assert_eq!(
         context.pc(),

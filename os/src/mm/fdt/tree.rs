@@ -1,4 +1,4 @@
-//! 遍历结构 token、检查属性顺序和节点嵌套，不解释平台地址。
+//! 设备树结构块（structure block）的词法与语法遍历。
 
 use alloc::vec::Vec;
 
@@ -69,7 +69,7 @@ impl<'a> Tree<'a> {
         kind: NodeKind,
         depth: usize,
     ) -> Result<(), &'static str> {
-        // 限制递归栈占用；超过限制明确失败，不跳过可能包含 RAM 的节点。
+        // 限制递归深度以保护 64 KiB 启动栈；超过上限时直接报错，防止静默漏掉深层节点。
         if depth > 32 {
             return Err("FDT nesting exceeds supported depth");
         }
@@ -103,7 +103,7 @@ impl<'a> Tree<'a> {
         Ok(())
     }
 
-    // 返回属性及第一个非属性 token，使 node 独占子节点和 END_NODE 的处理。
+    /// 读取当前节点的所有属性，并返回紧随其后的首个非 `PROP` token（`BEGIN_NODE` 或 `END_NODE`）。
     fn properties(&mut self, enabled: bool) -> Result<(Properties<'a>, u32), &'static str> {
         let mut properties = Properties::new(enabled);
         let mut names = Vec::new();

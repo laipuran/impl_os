@@ -1,7 +1,8 @@
-//! 以位图管理 4 KiB 物理页框；句柄独占分配器内的页框记录，销毁时自动回收。
+//! 基于位图的 4 KiB 物理页框分配器。
 //!
-//! 元数据来自启动堆，不访问被管理的物理内存，不建立映射或清零页面。
-//! 分配器由调用者持有，不使用全局可变状态；目前仅供关闭中断的 boot CPU 使用。
+//! 分配器元数据存放在内核静态堆中，初始化与分配过程不直接读写被管理的物理页，
+//! 也不负责建立页表映射或将页面清零。分配出的 [`Frame`] 句柄通过生命周期借用分配器，
+//! 离开作用域时自动归还页框。当前实现面向单核关中断环境。
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -12,18 +13,17 @@ mod bitmap;
 
 use bitmap::Bitmap;
 
-/// 页框大小，单位为字节。
+/// 物理页框大小（4 KiB）。
 pub const PAGE_SIZE: usize = 4096;
 const WORD_BITS: usize = usize::BITS as usize;
 
-/// 管理不连续可用区间的单页分配器。
+/// 管理多段不连续可用物理区间的单页分配器。
 ///
-/// 每页使用一位位图，并为每个位图字预留一个非空字索引槽，不为 RAM 空洞分配元数据。
-/// 所有句柄都借用分配器，因而在句柄销毁前无法销毁分配器。
-/// 此类型不支持跨 CPU 共享或中断重入。
-/// 仅保证同一分配器内不重复分配，不验证 RAM 有效性或跨分配器的地址重叠。
+/// 内部使用 1 bit/页的位图记录空闲状态（RAM 空洞不占空间），并配合非空位图字索引栈实现 $O(1)$ 分配与回收。
+/// 由于所有 [`Frame`] 句柄均借用自本结构体，编译器可在编译期保证分配器不会先于任何已分配的页框销毁。
+/// 当前使用 `RefCell` 维护内部可变性，不支持跨核共享或中断重入。
 pub struct FrameAllocator {
-    // 正式页框使用者接入前，仅 ktest 读取区间并调用分配接口；接入后移除对应豁免。
+    // 在页表模块正式接入前，仅 ktest 直接读取区间并调用分配接口。
     #[cfg_attr(not(feature = "ktest"), allow(dead_code))]
     regions: Vec<Region>,
     total: usize,
@@ -31,15 +31,14 @@ pub struct FrameAllocator {
 }
 
 impl FrameAllocator {
-    /// 为内存地图中的可用完整页建立分配记录；必须在内核堆初始化后调用。
+    /// 根据 [`MemoryMap`] 中的可用物理区间构建页框分配器（需在内核堆初始化后调用）。
     ///
-    /// 可用区间列表可以为空，此时总页数和空闲页数均为零，分配返回 `None`。
-    /// 不访问所描述的物理内存，因此也可用于合成区间的记账。
+    /// 允许传入可用区间为空的 `MemoryMap`，此时 `total()` 和 `available()` 均为 0，`alloc()` 恒返回 `None`。
+    /// 构造过程仅初始化位图元数据，不会解引用 `map` 中描述的物理地址。
     ///
     /// # Errors
     ///
-    /// 可用区间未按 4 KiB 对齐，页数溢出，或启动堆无法容纳
-    /// 位图及非空字索引时返回错误。
+    /// 当可用区间未按 [`PAGE_SIZE`] 对齐、总页数计算溢出，或内核堆空间不足以容纳位图与索引数组时返回错误。
     pub fn new(map: MemoryMap) -> Result<Self, &'static str> {
         let mut total = 0usize;
         for region in map.usable() {
@@ -58,20 +57,19 @@ impl FrameAllocator {
         })
     }
 
-    /// 返回管理的总页数，包括当前已分配的页。
+    /// 返回受管理的总物理页框数（含已分配页框）。
     pub fn total(&self) -> usize {
         self.total
     }
 
-    /// 返回当前空闲页数。
+    /// 返回当前空闲的物理页框数。
     pub fn available(&self) -> usize {
         self.state.borrow().available()
     }
 
-    /// 分配一个未清零的页框；耗尽时返回 `None`，不申请额外堆内存。
+    /// 分配一个 4 KiB 物理页框（内容未清零）；若空闲页耗尽则返回 `None`。
     ///
-    /// 物理地址零也是有效分配结果。返回的句柄销毁时自动回收页框。
-    /// 不承诺地址顺序；位图字的选择和更新为常数时间，不扫描整个位图。
+    /// 分配过程为 $O(1)$ 位图操作且不会触发堆分配。注意物理地址 `0` 在特定合成测试区间下也是合法返回值。
     #[cfg_attr(not(feature = "ktest"), allow(dead_code))]
     pub fn alloc(&self) -> Option<Frame<'_>> {
         let index = self.state.borrow_mut().alloc()?;
@@ -82,19 +80,18 @@ impl FrameAllocator {
     }
 }
 
-/// 独占所属分配器内的一个页框记录；不可复制，销毁时自动归还。
+/// 代表单个已分配物理页框独占所有权的 RAII 句柄，销毁时自动将页框归还给 [`FrameAllocator`]。
 ///
-/// 本类型不提供安全的内存引用。调用者建立映射或通过裸指针访问页面时，
-/// 必须另行确认地址对应有效且独占的 RAM，不与内核、启动数据或其他使用者冲突，
-/// 并保证所有访问和映射在句柄销毁前结束；物理地址本身不延长有效期。
-#[must_use = "销毁句柄会立即回收页框"]
+/// `Frame` 仅负责物理页框的分配记账，不直接提供内存引用。调用方在将该物理页映射到页表或通过指针访问前，
+/// 需确保该物理区间对应真实且独占的 RAM，并在 `Frame` 销毁前解除页表映射、停止一切访问。
+#[must_use = "丢弃 Frame 句柄会立即回收该物理页框"]
 pub struct Frame<'a> {
     allocator: &'a FrameAllocator,
     index: usize,
 }
 
 impl Frame<'_> {
-    /// 返回按 [`PAGE_SIZE`] 对齐的物理字节地址，不是可直接解引用的虚拟地址。
+    /// 返回该页框按 [`PAGE_SIZE`] 对齐的起始**物理字节地址**（不可直接作为虚拟指针解引用）。
     #[cfg_attr(not(feature = "ktest"), allow(dead_code))]
     pub fn start_address(&self) -> usize {
         let mut index = self.index;

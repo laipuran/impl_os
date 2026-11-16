@@ -1,28 +1,32 @@
-# 开发约定
+# 开发规范与离线依赖维护
 
-- 内核使用 Rust 2021、`no_std`、panic abort；通过 Makefile 指定裸机 target。
-- 合并前运行 `just check`（格式检查及双架构默认、`ktest` 配置的 Clippy）并手动验证启动，提交前运行宿主侧 `just judge-build`。命令职责见[分工表](targets.md)，检查范围见[开发检查](../testing/README.md)。
-- unsafe 必须说明地址、权限、生命周期、别名或中断状态等安全前提；不要用裸指针掩盖资源所有权设计。
-- 硬件/架构代码留在边界；共享业务代码不遍布 `cfg(target_arch)`。
-- 当前控制台只支持单启动 CPU；引入中断/多核输出前先解决同步与重入。
-- 新增依赖前核对许可证、`no_std`/target 支持和工具链兼容性；版本由 `Cargo.lock` 锁定，依赖源码随仓库提交到 `vendor/`。更新流程见下文“更新离线依赖”，不依赖本地或评测镜像的 registry 缓存。
-- `make all` 不能下载依赖、修改宿主环境、读取相邻仓库或依赖被忽略的 `artifacts/`。
-- 修改环境或测试版本时，同步更新环境约束和检查说明。
+## 编码与架构约定
 
-## 更新离线依赖
+- **语言与编译配置**：内核使用 Rust 2021 Edition，处于 `#![no_std]`、`#![no_main]` 环境，panic 策略为 `abort`。始终通过 `Makefile` 或 `just` 指定裸机 target 编译。
+- **架构解耦**：与特定 ISA、CSR、汇编或启动表相关的实现统一收敛在 `os/src/arch/` 下，共享内核模块通过 `crate::arch` 调用，避免在通用代码中散落 `#[cfg(target_arch = ...)]`。
+- **`unsafe` 规范**：所有 `unsafe fn` 的文档注释需包含 `# Safety` 章节；所有 `unsafe` 块需附上具体的 `// SAFETY:` 注释，说明当前上下文如何满足地址有效性、对齐、生命周期、独占访问及关中断等前提。
+- **单核假设**：当前控制台与分配器均针对“单核、关中断”阶段设计。后续引入外设中断或多核支持前，需先补齐关中断自旋锁与重入保护。
+- **评测构建纯净性**：`make all` 必须能够在断网、无隐藏目录（`.cargo/` 等被过滤）、无外部缓存的环境中独立完成，不得访问外部网络、相邻目录或被 Git 忽略的 `artifacts/`。
 
-新增或更新依赖后，在可联网的开发环境执行 `just vendor`，一起提交清单、`Cargo.lock` 和 `vendor/` 的变更。该命令按锁文件收集依赖源码，将各依赖的 `.cargo-checksum.json` 改为非隐藏的 `cargo-checksum.json`，再创建原名的相对符号链接。重复执行会复用未变化的版本目录；不要手动修改第三方源码或校验内容。更新前仍须核对依赖许可证和双架构支持。
+## 维护离线依赖（`vendor/`）
 
-Makefile 的 `prepare-vendor` 目标负责恢复被评测过滤的隐藏校验链接，`make all`、`just vendor` 和 `just lint` 共用该实现。该目标不会联网或更新依赖。链接不纳入版本控制；若原名已被普通文件或错误链接占用，准备步骤会报错而不覆盖。依赖源码目录必须可写，且更新 vendor 时不能并行构建。
+由于比赛评测环境完全断网，且评测平台在拷贝源码时可能会过滤以 `.` 开头的隐藏文件（如 Cargo 默认生成的 `.cargo-checksum.json`），仓库采用以下机制维护 `vendor/`：
 
-Cargo 配置保存在非隐藏的 `cargo/config.toml`，构建和 Clippy 均通过 `--config cargo/config.toml` 显式加载；Clippy 必须将该选项放在 `clippy` 子命令之后。Cargo 按配置文件上两级目录解析相对路径，因此此处的 `directory = "vendor"` 指向仓库根目录的 `vendor/`，不能直接把配置移到根目录而保持路径不变。工具链、目标标准库和系统构建工具仍由开发或评测环境提供，不属于 vendor 的内容。
+1. **添加或更新依赖**：
+   - 先确认新依赖支持 `no_std`、兼容 `riscv64` 与 `loongarch64` 且许可证合规。
+   - 修改 `os/Cargo.toml` 后，在可联网的开发容器中执行：
+     ```bash
+     just vendor
+     ```
+   - `just vendor` 会运行 `cargo vendor --locked --versioned-dirs vendor`，并将每个依赖包下的隐藏文件 `.cargo-checksum.json` 重命名为非隐藏的 `cargo-checksum.json`，最后调用 `make prepare-vendor` 在本地建立同名软链接 `.cargo-checksum.json -> cargo-checksum.json`。
+   - 将更新后的 `os/Cargo.toml`、`Cargo.lock` 以及 `vendor/` 目录一并提交到 Git（符号链接 `.cargo-checksum.json` 被 `.gitignore` 忽略，无需提交）。
 
-提交前运行宿主侧 `just judge-build`，验证隐藏文件被过滤、Cargo 缓存为空且网络关闭时仍能构建两个架构。
+2. **构建时自动恢复校验链接**：
+   - `Makefile` 中的 `prepare-vendor` 目标会在编译前遍历 `vendor/*/cargo-checksum.json`，自动补齐 `.cargo-checksum.json` 软链接。这样即使评测机过滤了所有隐藏文件，`make all` 依然能通过 Cargo 的 vendor 完整性校验。
+   - Cargo 配置文件存放在非隐藏路径 [`cargo/config.toml`](../../cargo/config.toml)，编译和 Clippy 均通过 `--config cargo/config.toml` 显式指定（注意 Cargo 会相对于配置文件所在目录的上两级解析相对路径，因此请勿随意移动 `cargo/config.toml` 的位置）。
 
-## 提交前清单
+## 合并与提交前检查清单
 
-1. 干净构建生成两个 ELF，`readelf -h` 架构正确。
-2. 验证隐藏文件/目录被过滤后仍可执行比赛构建入口。
-3. 运行已实现的真实回归用例，保留原始失败信息。
-4. 检查 `git status`，不要提交测试盘、构建产物、凭据或第三方二进制。
-5. 阶段截止前按比赛要求公开仓库并提交纯仓库链接。
+1. **静态检查与自检**：在开发容器内执行 `just check`、`just test rv` 和 `just test la`，确认无格式问题、无 Clippy 警告且双架构自检全部通过。
+2. **评测构建验证**：在宿主机执行 `just judge-build`，确认在断网、清空 Cargo 缓存、过滤所有隐藏文件与目录的原始比赛镜像中，仍能成功生成 `kernel-rv` 与 `kernel-la`。
+3. **仓库卫生检查**：检查 `git status` 与 `git diff --staged`，确保未误暂存测试镜像、临时日志、根目录编译出的 ELF 二进制或本地工具配置。

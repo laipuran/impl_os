@@ -62,7 +62,7 @@ riscv_kernel_test_kernel:
 .globl riscv_kernel_test_kernel_break
 riscv_kernel_test_kernel_break:
     ebreak
-    # 借用 t0 检查其他恢复的 GPR 前，先检查 t0。
+    # 先校验 `t0` 自身，随后才能用 `t0` 作为临时寄存器逐个比对其余恢复的通用寄存器。
     addi t0, t0, -0x205
     bnez t0, .Lrv_kernel_test_failed
     RV_KERNEL_TEST_CHECK ra, 0x201
@@ -155,8 +155,7 @@ riscv_kernel_test_call_user:
     sd s9, 96(sp)
     sd s10, 104(sp)
     sd s11, 112(sp)
-    # 单 hart、非递归探针：即使调用破坏 sp，也能恢复。
-    # 仅使用 PC-relative 寻址，不使用可能被破坏的 gp/tp。
+    # 通过 PC 相对寻址将当前 `sp` 备份到 `.Lrv_abi_stack`，即使被测调用破坏了 `sp`/`gp`/`tp` 也能安全恢复。
     la t0, .Lrv_abi_stack
     sd sp, 0(t0)
     li s0, 0x708
@@ -171,7 +170,7 @@ riscv_kernel_test_call_user:
     li s9, 0x719
     li s10, 0x71a
     li s11, 0x71b
-    # gp/tp 在 Rust ABI shim 调用前后保留有效的平台值。
+    # 保持内核原有的 `gp` 和 `tp` 进入 `run_user_shim`。
     call {run_user_shim}
 .Lrv_abi_return:
     la t0, .Lrv_abi_stack
@@ -198,7 +197,7 @@ riscv_kernel_test_call_user:
 .Lrv_abi_failed:
     li a0, 0
 .Lrv_abi_finish:
-    # 所有观察均发生在恢复调用者保存的 ABI 状态之前。
+    # 全部校验完成后再恢复调用方的寄存器与栈指针。
     mv sp, t1
     ld ra, 0(sp)
     ld gp, 8(sp)
@@ -229,7 +228,7 @@ riscv_kernel_test_call_user:
 .globl riscv_kernel_test_user_first
 riscv_kernel_test_user_first:
     ecall
-    # PC 更新错误必须导致失败，而不能意外到达恢复执行探针。
+    # 放置全 0 非法指令：若内核未显式更新 `sepc` 而直接顺序往下跑，将立即触发异常。
     .word 0
 .globl riscv_kernel_test_user_second
 riscv_kernel_test_user_second:
@@ -241,7 +240,7 @@ riscv_kernel_test_user_privileged:
     .word 0
 .globl riscv_kernel_test_user_float
 riscv_kernel_test_user_float:
-    # fadd.s f0,f0,f0：FS=Off 必须触发非法指令异常。
+    # `fadd.s f0, f0, f0`：当 `sstatus.FS = Off` 时必须触发非法指令异常。
     .word 0x00000053
     .word 0
 .option pop

@@ -1,25 +1,24 @@
-//! 单核、禁用中断的监管态与用户态整数上下文切换。
+//! RISC-V 64 单核关中断环境下的 S-mode / U-mode 整数上下文切换。
 //!
-//! 执行内核代码时 `sscratch` 为零；执行用户代码时，它指向内核拥有的
-//! 切换栈帧。不保存浮点和向量状态：FS/VS/XS 始终关闭，
-//! 因此使用这些扩展会显式触发陷阱。
+//! 寄存器与栈切换约定：
+//! - 内核态运行期间，`sscratch` 恒保持为 `0`；
+//! - 调用 [`run_user`] 进入用户态前，将内核栈上的切换帧地址写入 `sscratch`；
+//! - 浮点、向量与扩展状态位（`FS`/`VS`/`XS`）始终保持关闭（`Off`），用户或内核执行扩展指令会触发非法指令异常。
 
 use core::arch::{asm, global_asm};
 
 pub mod cause;
 use cause::TrapCause;
 
-const USER_STATUS: usize = 2 << 32; // UXL=64；SPP、SPIE、SIE、FS、VS、XS 均为零。
+const USER_STATUS: usize = 2 << 32; // UXL = 64 位；SPP、SPIE、SIE、FS、VS、XS 均置 0。
 const DISABLED_STATUS: usize = (1 << 1) | (1 << 5) | (3 << 9) | (3 << 13) | (3 << 15);
 const SWITCH_FRAME_SIZE: usize = 18 * core::mem::size_of::<usize>();
 
-/// 整数寄存器与监管态陷阱 CSR，按架构 x 寄存器编号索引。
+/// 保存 32 个通用寄存器（`x0..x31`）与 S-mode 异常 CSR 的上下文结构。
 ///
-/// `gpr[0]` 始终保存为零；`gpr[2]` 是被中断时的栈指针。
-/// 私有 CSR 字段保留 `sepc`、`sstatus`、`scause`、`stval`
-/// 的硬件含义。调用者只能修改整数寄存器和程序计数器。
-/// 内核陷阱返回时强制使用监管态，并保持中断和扩展关闭；
-/// 进入用户态时替换传入状态中的所有控制位。
+/// - `gpr[0]` 对应硬件零寄存器 `x0`（恒存为 0）；`gpr[2]` 为被打断时的栈指针 `sp`。
+/// - `sepc`、`sstatus`、`scause`、`stval` 字段设为私有，仅对外暴露通用寄存器与 PC 的修改接口。
+/// - 内核 Trap 返回时强制恢复为 S-mode 并关闭中断与扩展；[`run_user`] 进入用户态前也会强制重置 `sstatus`。
 #[repr(C)]
 pub struct TrapContext {
     gpr: [usize; 32],
@@ -29,23 +28,17 @@ pub struct TrapContext {
     stval: usize,
 }
 
-// 在编译期校验 Rust 现场布局与汇编栈帧约定。
+// 编译期静态断言：确保 `TrapContext` 的大小、字段偏移与对齐方式满足汇编代码的栈帧与 12 位有符号立即数约束。
 const _: () = {
     assert!(core::mem::size_of::<usize>() == 8);
     assert!(core::mem::offset_of!(TrapContext, gpr) == 0);
     assert!(core::mem::size_of::<TrapContext>() == 288);
     assert!(core::mem::size_of::<TrapContext>() % 16 == 0);
-    // 将上下文的对齐要求固定为机器字对齐（RV64 为 8 字节），
-    // 因而汇编按 16 字节对齐的栈上现场满足 Rust 引用的对齐要求；
-    // 若以后引入更严格的对齐要求，必须同时审查汇编的栈帧分配。
     assert!(core::mem::align_of::<TrapContext>() == core::mem::align_of::<usize>());
-    // addi 的立即数是有符号 12 位数，范围为 -2048..=2047。
-    // 入口既用 -context_size 分配现场，又用 +context_size 计算原始 sp，
-    // 因此大小必须不超过正向上界 2047，而不能只满足负向的 2048。
+    // RISC-V `addi` 指令立即数范围为 `-2048..=2047`；入口汇编既用 `-context_size` 分配栈帧，
+    // 又用 `+context_size` 还原原始 `sp`，因此结构体大小不能超过 `2047`。
     assert!(core::mem::size_of::<TrapContext>() <= 2047);
-    // ld/sd 的字段偏移同样使用有符号 12 位立即数；stval 是最后一个字段。
     assert!(core::mem::offset_of!(TrapContext, stval) <= 2047);
-    // 用户态切换栈帧也必须保持 ABI 对齐，且正负栈调整都能用 addi 编码。
     assert!(SWITCH_FRAME_SIZE % 16 == 0 && SWITCH_FRAME_SIZE <= 2047);
 };
 
@@ -73,14 +66,13 @@ extern "C" fn kernel_handler(context: &mut TrapContext) {
     crate::trap::handle_kernel(context);
 }
 
-#[allow(dead_code)] // 公开上下文接口；使用方按架构选用部分方法。
+#[allow(dead_code)] // 统一的跨架构上下文接口，部分方法仅在特定路径或自检中调用。
 impl TrapContext {
-    /// 构造关闭中断和扩展的 RV64 用户上下文。
+    /// 构造初始 U-mode 上下文（关闭中断与浮点/向量扩展）。
     ///
-    /// `entry` 必须指向用户可执行代码，且至少两字节对齐；
-    /// `stack` 必须按 16 字节对齐，并界定可写的用户内存。
-    /// 本构造函数不校验地址，也不提供内存隔离。
-    #[allow(dead_code)] // 公开进入接口；默认启动流程不执行用户代码。
+    /// `entry` 为用户程序入口地址（至少 2 字节对齐），`stack` 为 16 字节对齐的用户栈顶地址。
+    /// 本构造函数仅初始化寄存器数值，不检查地址有效性，也不建立页表映射。
+    #[allow(dead_code)]
     pub fn user(entry: usize, stack: usize) -> Self {
         let mut context = Self {
             gpr: [0; 32],
@@ -93,59 +85,57 @@ impl TrapContext {
         context
     }
 
-    /// 按架构 x 寄存器编号索引整数寄存器，包含保存的 x0。
+    /// 返回按 `x0..x31` 排列的通用寄存器只读切片。
     pub fn registers(&self) -> &[usize; 32] {
         &self.gpr
     }
 
-    /// 修改整数状态；硬件恢复时 x0 仍恒为零。
+    /// 返回按 `x0..x31` 排列的通用寄存器可变切片（修改 `gpr[0]` 在硬件恢复时仍会被忽略）。
     pub fn registers_mut(&mut self) -> &mut [usize; 32] {
         &mut self.gpr
     }
 
-    /// 保存的异常程序计数器（`sepc`），并非自动推进后的恢复地址。
+    /// 返回捕获的异常程序计数器（`sepc`）。
     pub fn pc(&self) -> usize {
         self.sepc
     }
 
-    /// 设置下一程序计数器；对齐与可执行内存有效性由调用者保证。
+    /// 设置下次返回时的程序计数器（`sepc`）。
     pub fn set_pc(&mut self, pc: usize) {
         self.sepc = pc;
     }
 
-    /// 被中断时的栈指针，即架构寄存器 x2。
+    /// 返回被打断时的栈指针（`x2` / `sp`）。
     pub fn sp(&self) -> usize {
         self.gpr[2]
     }
 
-    /// 解码 `scause`，不决定异常恢复策略。
+    /// 将保存的 `scause` 解码为类型化的 [`TrapCause`]。
     pub fn cause(&self) -> TrapCause {
         TrapCause::from_scause(self.scause)
     }
 
-    /// 原始保存的 `scause`，包含最高位的中断标志。
+    /// 返回原始的 `scause` 寄存器值（含最高位中断标志）。
     pub fn raw_cause(&self) -> usize {
         self.scause
     }
 
-    /// 原始保存的 `sstatus`；返回路径会约束特权级和扩展控制位。
+    /// 返回原始的 `sstatus` 寄存器值。
     pub fn raw_status(&self) -> usize {
         self.sstatus
     }
 
-    /// 保存的 `stval`：错误地址或指令位；不可用时为零。
+    /// 返回保存的 `stval` 寄存器值（故障地址或非法指令编码，无意义时为 0）。
     pub fn bad_addr(&self) -> usize {
         self.stval
     }
 }
 
-/// 安装直接模式监管态向量，并初始化单核暂存寄存器。
+/// 安装 S-mode Direct 模式异常入口（`stvec`），关闭中断与扩展并清零 `sscratch`。
 ///
-/// 在启动核上以监管态调用一次，且须早于进入用户代码。
-/// 中断源及浮点、向量和其他扩展状态保持关闭。
+/// 必须在主核启动阶段调用一次，且早于任何用户态切换。
 pub fn init() {
-    // SAFETY: 启动阶段仅一个核执行 S 模式；对齐的汇编向量和内核栈
-    // 已经映射，且初始化期间没有正在进行的用户态切换。
+    // SAFETY: 启动阶段仅主核在 S-mode 下执行；汇编入口 `riscv_trap_entry` 已按 4 字节对齐且位于常驻内核代码段。
     unsafe {
         asm!(
             "csrc sstatus, {disabled}",
@@ -159,25 +149,20 @@ pub fn init() {
     }
 }
 
-/// 进入用户态，在任意用户陷阱发生时返回并保存全部整数状态。
+/// 降权进入 U-mode 执行 `context`，当用户态触发任何 Trap 时保存完整整数现场并返回。
 ///
-/// 恢复程序计数器和整数寄存器；传入的 `sstatus` 会被刻意
-/// 替换为 RV64 用户态状态，绝不信任其特权级或扩展
-/// 控制位。返回时陷阱 CSR 描述异常。内核被调用者保存寄存器、
-/// gp/tp 和调用栈在往返切换中保持不变。
+/// 进入用户态前会将 `context.sstatus` 强制覆写为 [`USER_STATUS`]，防止外部传入非法的特权级或扩展使能位。
+/// 往返过程中内核的被调用者保存寄存器（`s0..s11`）、`ra`、`gp`、`tp` 与 `sp` 均保持不变。
 ///
 /// # Safety
-/// 必须已在本核执行 `init`，且中断仍关闭，没有其他正在进行的
-/// 用户态切换。上下文必须始终有效，并由调用者独占。
-/// 调用者必须提供有效的用户可执行程序计数器和可访问的用户栈、数据
-/// 内存，满足 ABI 对齐；如需本调用返回，还必须安排触发陷阱。
-/// 裸地址模式假设固件 PMP 允许用户访问内存。本机制不提供
-/// 内存隔离：用户代码不得覆盖内核代码、栈或数据。
-#[allow(dead_code)] // 公开进入接口；默认启动流程不执行用户代码。
+///
+/// - 调用前当前核必须已执行 [`init`]，且处于关中断、无其他活跃用户态切换的状态。
+/// - `context` 在整个切换期间必须保持有效且由当前调用独占。
+/// - 调用方必须提供合法对齐的用户入口 PC 与用户栈，并确保用户代码不会篡改内核代码、栈或 `context` 自身。
+#[allow(dead_code)]
 pub unsafe fn run_user(context: &mut TrapContext) {
     context.sstatus = USER_STATUS;
-    // SAFETY: 调用者保证用户内存有效，且单核环境已初始化；
-    // 汇编先保存内核 ABI 状态，再恢复用户寄存器。
+    // SAFETY: 调用者保证单核关中断环境及用户代码/栈有效；汇编先在内核栈保存被调用者寄存器，再加载 `context` 执行 `sret`。
     unsafe { riscv_run_user(context) };
 }
 

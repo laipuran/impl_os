@@ -1,13 +1,13 @@
 .section .text.trap,"ax"
 .Lreturn_kernel:
-    # 防止内核处理函数意外以用户特权级返回。
+    # 内核态异常返回前强制清除 PPLV 与 PIE（仅保留 PWE），确保返回后仍处于 PLV0 且关中断。
     ld.d $t0, $sp, {prmd}
     andi $t0, $t0, 8
     st.d $t0, $sp, {prmd}
     b .Lrestore_context
 
 .Lreturn_user_trap:
-    # 恢复内核 tp/sp 及被调用者保存寄存器之前，不执行 Rust 代码。
+    # 从 SAVE2 取出内核切换栈帧，恢复内核被调用者保存寄存器并返回给 `__loongarch_run_user` 的调用方。
     csrrd $sp, 0x32
     ld.d $t0, $sp, 8
     csrwr $t0, 0x32
@@ -59,8 +59,7 @@ __loongarch_run_user:
     ld.d $t0, $sp, {era}
     csrwr $t0, 0x6
     ld.d $t0, $sp, {prmd}
-    # 异常返回时禁止开启中断；PRMD 中高于 PWE 的位均为保留位。
-    # run_user 还会在 Rust 中强制设置 PPLV=3、PWE=0。
+    # 屏蔽 PIE（bit 2）及高位保留位，禁止在异常返回时开启中断。
     andi $t0, $t0, 0xb
     csrwr $t0, 0x1
     b .Lrestore_registers

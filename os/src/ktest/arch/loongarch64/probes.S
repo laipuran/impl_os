@@ -1,8 +1,7 @@
 .section .text.trap_kernel_test,"ax"
 .balign 4
 
-# 仅由 feature 启用的单 CPU wrapper 使用这些可信恢复指针。
-# 恢复后的 sp 即使损坏，也不得妨碍恢复 wrapper 调用者的 ABI。
+# 在当前栈帧中保存调用方的被调用者保存寄存器，并将该栈帧的 `$sp` 备份到指定的静态槽位；即使被测代码破坏了 `$sp` 也能安全恢复。
 .macro save_probe_abi slot
     addi.d $sp, $sp, -128
     st.d $ra, $sp, 16
@@ -55,7 +54,6 @@
 .global __loongarch_kernel_test_kernel
 .type __loongarch_kernel_test_kernel, @function
 __loongarch_kernel_test_kernel:
-    # 保存哨兵测试覆盖的所有内核 ABI 寄存器。
     save_probe_abi .Lkernel_saved_sp
     li.w $r1, 0x601
     li.w $r2, 0x602
@@ -90,7 +88,7 @@ __loongarch_kernel_test_kernel:
 .global __loongarch_kernel_test_kernel_break
 __loongarch_kernel_test_kernel_break:
     break 0
-    # 将恢复后的 t0 用作比较临时寄存器前，先检查其自身。
+    # 先校验 `$t0`（`$r12`）自身，随后再用 `$t0` 作为临时寄存器核对其余通用寄存器。
     addi.d $t0, $t0, -0x70c
     bnez $t0, .Lkernel_fail
     check_kernel_gpr $r1, 1
@@ -130,7 +128,6 @@ __loongarch_kernel_test_kernel_break:
 .Lkernel_fail:
     move $a0, $zero
 .Lkernel_restore:
-    # 上方未恢复调用者状态，因此不会掩盖错误恢复的 GPR。
     restore_probe_abi .Lkernel_saved_sp
 .size __loongarch_kernel_test_kernel, .-__loongarch_kernel_test_kernel
 
@@ -138,8 +135,7 @@ __loongarch_kernel_test_kernel_break:
 .type __loongarch_kernel_test_call_abi, @function
 __loongarch_kernel_test_call_abi:
     save_probe_abi .Lcall_saved_sp
-    # tp 与保留的 r21 在 Rust 调用前后必须保留有效的平台值。
-    # 仅为普通 callee-saved 寄存器设置合成哨兵值。
+    # 保持真实的 `$tp` 与 `$r21` 进入 Rust `abi_run_user`，为 `$fp` 和 `$s0..$s8` 填入特征值。
     li.w $fp, 0x816
     li.w $s0, 0x817
     li.w $s1, 0x818
@@ -151,7 +147,7 @@ __loongarch_kernel_test_call_abi:
     li.w $s7, 0x81e
     li.w $s8, 0x81f
     bl {run_user}
-    # 恢复调用者前完成检查，包括真实平台状态。
+    # 在恢复调用方栈帧前，先核对 `$sp`、`$tp`、`$r21` 以及 `$fp`/`$s0..$s8` 是否完好。
     la.local $t0, .Lcall_saved_sp
     ld.d $t0, $t0, 0
     bne $sp, $t0, .Lcall_fail
@@ -199,7 +195,7 @@ __loongarch_kernel_test_refill_load:
 .global __loongarch_kernel_test_user_first
 __loongarch_kernel_test_user_first:
     syscall 0
-    # 内核必须显式替换 ERA，不能盲目前移到此处。
+    # 紧跟 `break 0`：若内核未显式更新 `ERA` 而意外顺序执行到此处，会触发非预期的断点异常。
     break 0
 .global __loongarch_kernel_test_user_second
 __loongarch_kernel_test_user_second:

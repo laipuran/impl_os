@@ -3,7 +3,7 @@
 .option norvc
 .option norelax
 
-# t6 始终作为栈帧基址直到最后一次加载，不受恢复后的 sp 影响。
+# 以 `t6` 作为 `TrapContext` 基址恢复全部通用寄存器，最后一步再覆盖 `t6` 自身。
 .macro RV_RESTORE_GPRS
     ld ra, (RV_GPR + RV_WORD * 1)(t6)
     ld sp, (RV_GPR + RV_WORD * 2)(t6)
@@ -39,7 +39,7 @@
 .endm
 
 .Lrv_return_kernel:
-    # 嵌套同步陷阱在当前栈帧下方分配空间，sscratch 保持为零。
+    # 内核态 Trap 返回前强制清理 `sstatus`（关闭中断与扩展，并置位 `SPP = 1` 确保返回 S-mode）。
     ld t0, RV_PC(sp)
     csrw sepc, t0
     ld t0, RV_STATUS(sp)
@@ -53,7 +53,7 @@
     sret
 
 .Lrv_return_user_trap:
-    # 用户状态现已直接保存到调用者的上下文，无须复制栈帧。
+    # 用户态寄存器已直接写入调用方传入的 `TrapContext`，此处只需恢复内核被调用者保存寄存器并返回。
     ld gp, 8(sp)
     ld tp, 16(sp)
     ld ra, 0(sp)
@@ -99,8 +99,7 @@ riscv_run_user:
     ld t0, RV_STATUS(t6)
     csrw sstatus, t0
     csrw sscratch, sp
-    # 从此处到 sret 仅加载有效上下文。调用者必须保持上下文映射有效；
-    # 此短暂切换窗口中的访存异常不可恢复。
+    # 将切换栈帧指针写入 `sscratch` 后，加载用户寄存器并执行 `sret` 降权进入 U-mode。
     RV_RESTORE_GPRS
     sret
 .size riscv_run_user, .-riscv_run_user

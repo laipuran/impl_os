@@ -1,54 +1,61 @@
-# 构建 targets 与开发 recipes 的职责
+# Makefile 与 Justfile 任务对照表
 
-## 原则
+## 职责划分原则
 
-- **Make：产物契约。** 准备离线依赖校验链接，编译、导出、清理比赛 ELF；评测机只需 `make all`。
-- **Just：开发命令。** 直接调用 Rust、Docker、QEMU 工具；构建委托 Make。
-- 环境安装与构建分开；命令的检查范围见[开发检查](../testing/README.md)。
+- **`Makefile`（比赛构建契约）**：负责恢复 `vendor/` 校验软链接、调用 Cargo 离线编译双架构内核并将 ELF 产物复制到仓库根目录。评测机只运行 `make all`，不依赖 `just` 或 Docker。
+- **`justfile`（日常开发工作流）**：提供环境检查、代码格式化、Clippy 静态分析、QEMU 运行/调试、内核自检及宿主机容器管理等快捷命令；所有涉及内核编译的步骤均委托给 `Makefile` 执行。
 
-## Make targets
+---
 
-| Target | 职责 |
-|---|---|
-| `all`（默认） | 构建两个架构，输出根目录 `kernel-rv`、`kernel-la` |
-| `prepare-vendor` | 从非隐藏校验文件恢复 Cargo 校验链接；两个架构共用此先决条件 |
-| `kernel-rv` | Cargo 离线增量构建 RISC-V，导出 ELF |
-| `kernel-la` | Cargo 离线增量构建 LoongArch，导出 ELF |
-| `clean` | 删除 `target/` 和两个根目录 ELF，保留测试盘/日志 |
+## `Makefile` 目标一览
 
-日常变量：`CARGO`、`MODE=release|debug`、`FEATURES`（默认空；全部内核自检统一使用 `ktest`）。`TARGET_DIR` 可由命令行覆盖，用于原始镜像中的独立缓存构建。所有目标为 phony，源码增量判断交给 Cargo；链接参数唯一来源为 `os/build.rs`。
-
-调整支持架构或 Rust target 时，同步核对 `rust-toolchain.toml` 的目标列表、Makefile 的产物映射、Just 的 `setup` / `doctor` / `lint` / QEMU 命令，以及 `os/build.rs` 和架构实现。各入口保留各自职责，不另建一套构建逻辑。
-
-## Just：容器内任务
-
-| Recipe | 职责 |
-|---|---|
-| 默认 `just` | 列出任务，不构建、不安装 |
-| `setup` | 显式联网准备固定 Rust、targets、开发组件；禁止 rustup 自更新 |
-| `doctor` | 只读检查环境，缺工具即失败；不自动安装 |
-| `build [all\|rv\|la] [release\|debug] [features]` | 默认构建双架构 release，按参数转发给对应 Make 目标 |
-| `clean` | 转发给 `make clean` |
-| `fmt` | 修改 Rust 源码格式 |
-| `fmt-check` | 只检查格式 |
-| `lint` | 两个裸机 target 的默认和 `ktest` 配置分别运行 Clippy，不导出根目录 ELF |
-| `vendor` | 按锁文件更新依赖源码和校验链接，可联网；不属于构建前置步骤 |
-| `check` | 组合 `fmt-check` 和 `lint` |
-| `run <rv\|la> [QEMU 参数…]` | 构建所选架构的 release ELF，启动 QEMU |
-| `test [rv\|la] [release\|debug]` | 默认 rv/release；构建启用 `ktest` 的 ELF，在 QEMU 中执行所选架构的全部已接入自检 |
-| `debug <rv\|la> [QEMU 参数…]` | 构建所选架构的 debug ELF，QEMU 暂停并监听 GDB `:1234` |
-
-运行时用环境变量 `MEM`、`SMP` 设置内存/核数，默认 1G/1。额外参数直接传给 QEMU，使用其原生选项。
-
-## Just：宿主任务
-
-| Recipe | 职责 |
+| Target | 说明 |
 | --- | --- |
-| `image-pull` | 显式拉取固定 digest 的比赛原始镜像 |
-| `image-build` | 构建 `impl-os-dev:20260510`：补充开发工具，并缓存 Linux 宿主 UID/GID；其他宿主使用 `1000:1000` |
-| `container [命令…]` | 直接以镜像中的 `dev` 用户执行，不迁移所有权、不隐式 pull；仅终端交互时加 `-it` |
-| `judge-build` | 原始镜像禁网，过滤隐藏文件后以空 Cargo 缓存和独立临时构建目录执行 `make all`；导出 ELF 使用 Linux 宿主 UID/GID，其他宿主使用 `1000:1000` |
+| `all`（默认） | 编译双架构内核，在仓库根目录生成 `kernel-rv` 与 `kernel-la` |
+| `prepare-vendor` | 遍历 `vendor/*/cargo-checksum.json` 创建 `.cargo-checksum.json` 软链接 |
+| `kernel-rv` | 离线编译 RISC-V 内核并复制到根目录 `kernel-rv` |
+| `kernel-la` | 离线编译 LoongArch 内核并复制到根目录 `kernel-la` |
+| `clean` | 执行 `cargo clean` 并删除根目录的 `kernel-rv`、`kernel-la` |
 
-基础镜像唯一来源是 `.devcontainer/Dockerfile` 的 `ARG CONTEST_IMAGE`，VS Code 和 Just 共用该 Dockerfile。
+**支持覆盖的 Make 变量：**
+- `CARGO`：Cargo 可执行文件路径（默认 `cargo`）。
+- `MODE`：`release`（默认）或 `debug`。
+- `FEATURES`：传给 Cargo `--features` 的特性列表（默认空；自检时传入 `ktest`）。
+- `TARGET_DIR`：编译中间产物目录（默认 `$(CURDIR)/target`；`just judge-build` 会将其指向容器 `/tmp` 下的独立目录）。
 
-宿主示例：`just container just check`。不要在 Dev Container 中执行宿主 Docker 任务，容器不挂载 Docker socket。
+---
+
+## `justfile`：容器内开发命令
+
+以下命令在**开发容器内**执行：
+
+| 命令 | 说明 |
+| --- | --- |
+| `just` | 列出所有可用任务 |
+| `just setup` | 联网安装固定版本的 Rust 工具链、双架构 target 及开发组件（禁止 rustup 自更新） |
+| `just doctor` | 只读检查工具链、target、QEMU 与 GDB 是否齐备（缺失时直接报错，不自动联网安装） |
+| `just build [all\|rv\|la] [release\|debug] [features]` | 转发给 `make` 编译指定架构与模式的内核（默认 `all release`） |
+| `just clean` | 调用 `make clean` 清理编译产物 |
+| `just fmt` | 运行 `cargo fmt --all` 格式化代码 |
+| `just fmt-check` | 检查代码格式是否符合规范（不修改文件） |
+| `just lint` | 对双架构的默认配置与 `ktest` 配置（共 4 个组合）运行 Clippy 静态检查（`-D warnings`） |
+| `just check` | 依次执行 `fmt-check` 与 `lint` |
+| `just vendor` | 根据 `Cargo.lock` 更新 `vendor/` 依赖源码并重命名校验文件（需联网） |
+| `just run <rv\|la> [QEMU 参数…]` | 编译对应架构的 release 内核并在 QEMU 中启动 |
+| `just test [rv\|la] [release\|debug]` | 编译开启 `ktest` 特性的内核并在 QEMU 中执行启动自检（默认 `rv release`） |
+| `just debug <rv\|la> [QEMU 参数…]` | 编译对应架构的 debug 内核，启动 QEMU 并暂停在入口，监听 `:1234` 等待 GDB |
+
+> **QEMU 资源配置：** 运行 `just run`、`just test` 或 `just debug` 时，可通过环境变量 `MEM`（默认 `1G`）和 `SMP`（默认 `1`）调整虚拟机内存与核数，例如 `MEM=768M just run la`。
+
+---
+
+## `justfile`：宿主机容器命令
+
+以下命令在**宿主机**执行（切勿在开发容器内运行）：
+
+| 命令 | 说明 |
+| --- | --- |
+| `just image-pull` | 拉取 `.devcontainer/Dockerfile` 中固定 SHA256 digest 的官方比赛镜像 |
+| `just image-build` | 构建本地开发镜像 `impl-os-dev:20260510`（自动注入宿主机 UID/GID 与开发工具） |
+| `just container [命令…]` | 以 `dev` 用户在开发容器中启动交互式终端，或单次执行传入的命令（如 `just container just check`） |
+| `just judge-build` | 在未修改的官方比赛镜像中禁网（`--network none`）、过滤所有隐藏文件与构建残留，使用空 Cargo 缓存执行 `make all` 并将生成的 ELF 拷回工作区 |

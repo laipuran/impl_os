@@ -1,8 +1,8 @@
-//! 构造测试用 FDT；只负责编码，不调用待测解析器。
+//! 独立编码的测试用 DTB 二进制构造器（不依赖被测的 `mm::fdt` 解析器）。
 
 use alloc::{vec, vec::Vec};
 
-// Devicetree Specification v0.4 §5.2 and §5.4 wire values.
+// Devicetree Specification v0.4 §5.2 与 §5.4 定义的二进制常量。
 const MAGIC: u32 = 0xd00dfeed;
 const BEGIN_NODE: u32 = 1;
 const END_NODE: u32 = 2;

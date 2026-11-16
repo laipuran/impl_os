@@ -1,4 +1,4 @@
-# 结构相关偏移均由 Rust 传入；整数寄存器槽位宽度为 XLEN。
+# `TrapContext` 字段偏移与大小均由 Rust `global_asm!` 传入。
 .equ RV_CTX_SIZE, {context_size}
 .equ RV_GPR, {gpr}
 .equ RV_WORD, {word_size}
@@ -6,7 +6,7 @@
 .equ RV_STATUS, {status}
 .equ RV_CAUSE, {cause}
 .equ RV_BAD_ADDR, {bad_addr}
-# 依次存放 ra/gp/tp/s0-s11、上下文指针、一个临时槽位及对齐填充。
+# 内核切换栈帧大小：依次保存 ra/gp/tp/s0..s11、TrapContext 指针、1 个临时槽位及对齐填充。
 .equ RV_SWITCH_SIZE, {switch_size}
 
 .section .text.trap,"ax"
@@ -14,7 +14,7 @@
 .option norvc
 .option norelax
 
-# 各入口路径分别保存 sp；t0 在用作栈帧基址前先保存。
+# 保存除 sp 和 t0 外的通用寄存器（sp 与 t0 由内核/用户两条入口分支各自单独处理）。
 .macro RV_SAVE_GPRS base
     sd zero, (RV_GPR + RV_WORD * 0)(\base)
     sd ra, (RV_GPR + RV_WORD * 1)(\base)
@@ -63,7 +63,7 @@
 .globl riscv_trap_entry
 .type riscv_trap_entry, @function
 riscv_trap_entry:
-    # S 模式下 sscratch 为零；U 模式下指向可信的切换栈帧。
+    # 交换 sp 与 sscratch：若原 sscratch 为 0，说明 Trap 来自内核态；否则原 sscratch 指向内核切换栈帧。
     csrrw sp, sscratch, sp
     bnez sp, .Lrv_user_trap
     csrrw sp, sscratch, sp
@@ -73,8 +73,7 @@ riscv_trap_entry:
     addi t0, sp, RV_CTX_SIZE
     sd t0, (RV_GPR + RV_WORD * 2)(sp)
     RV_SAVE_CSRS sp, t0
-    # 启动时将 tp 固定为零（内核不使用线程局部存储）；这两个 ABI 基址
-    # 都不能取自被中断的用户上下文或内核测试哨兵值。
+    # 进入 Rust 处理函数前重新加载内核 `gp` 并将 `tp` 清零，不沿用被打断现场中的寄存器值。
     la gp, __global_pointer$
     li tp, 0
     mv a0, sp

@@ -1,4 +1,4 @@
-//! 解析 QEMU direct boot 的合成 EFI 配置表，不调用 EFI services。
+//! 解析 QEMU LoongArch direct boot 构造的最小 EFI 系统表与配置表（不调用运行时 EFI 服务）。
 
 use crate::mm::regions::Region;
 
@@ -14,16 +14,17 @@ const INITRD_GUID: [u8; 16] = [
     0x27, 0xe4, 0x68, 0x55, 0xfc, 0x68, 0x3d, 0x4f, 0xac, 0x74, 0xca, 0x55, 0x52, 0x31, 0xcc, 0x68,
 ];
 
-/// 从配置表按 GUID 找到的启动载荷。
+/// 从 EFI 配置表中按 GUID 查找到的 FDT 物理地址与可选的 `initrd` 物理区间。
 pub(super) struct BootTables {
     pub fdt: usize,
     pub initrd: Option<Region>,
 }
 
-/// 解析 QEMU direct boot 的系统表、配置表数组和 initrd 描述。
+/// 在前 1 MiB 启动块切片 `data` 中解析 EFI 系统表、配置表数组及 `initrd` 描述结构。
 ///
-/// 这些结构必须位于 `data` 表示的 QEMU 前 1 MiB 启动块内。FDT 载荷可以
-/// 在启动块外，这里只检查其地址非零且按八字节对齐，由调用者映射并验证完整载荷。
+/// 系统表、配置表数组和 `initrd` 描述表本身必须完整落在 `data` 范围内；
+/// 而 FDT 本体通常位于 1 MiB 启动块之后，此处仅校验其物理地址非零且 8 字节对齐，
+/// 后续由调用方映射并校验完整 FDT 载荷。
 pub(super) fn parse(data: &[u8], system_table: usize) -> Result<BootTables, &'static str> {
     let table = table_slice(data, system_table, SYSTEM_TABLE_SIZE)?;
     if read_u64_le(table, 0)? != SYSTEM_TABLE_SIGNATURE {
@@ -55,8 +56,8 @@ pub(super) fn parse(data: &[u8], system_table: usize) -> Result<BootTables, &'st
         return Err("invalid boot FDT address");
     }
 
-    // 当前 direct boot 即使没有 initrd 也提供零值描述。必须找到该描述，
-    // 避免将缺失信息误解释为可覆盖的空闲 RAM。
+    // QEMU direct boot 即使在未挂载 initrd 时也会生成全 0 的 initrd 配置项；
+    // 要求必须找到该表项，防止因配置表损坏而漏保留真实存在的 initrd 内存。
     let initrd = table_slice(data, initrd_table.ok_or("missing boot initrd table")?, 16)?;
     let start = read_usize_le(initrd, 0)?;
     let size = read_usize_le(initrd, 8)?;

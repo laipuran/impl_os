@@ -1,21 +1,22 @@
 # 文档导航
 
-## 从哪里开始
+## 阅读顺序推荐
 
-1. [环境与 Dev Container](getting-started/environment.md)
-2. [日常构建、运行和调试](getting-started/workflow.md)
-3. [代码布局与模块职责](architecture/layout.md)
-4. [启动流程](architecture/boot.md)
-5. [Make / Just 任务分工](development/targets.md)
-6. [开发检查](testing/README.md)
+1. [开发环境与 Dev Container 配置](getting-started/environment.md)
+2. [日常编译、运行与 GDB 调试](getting-started/workflow.md)
+3. [代码结构与模块职责](architecture/layout.md)
+4. [启动流程、内存管理与异常处理](architecture/boot.md)
+5. [Makefile 与 Justfile 任务对照表](development/targets.md)
+6. [开发规范与离线依赖维护](development/README.md)
+7. [内核自检与测试验证](testing/README.md)
 
-## 各子目录职责
+## 文档目录结构
 
-| 目录 | 放什么 | 不放什么 |
-| --- | --- | --- |
-| `getting-started/` | 可直接执行的环境、开发流程说明 | 尚未落地的架构设想 |
-| `architecture/` | 当前代码结构、模块边界、启动流程 | 未实现模块的占位设计 |
-| `development/` | 编码、安全、依赖及提交约定 | 单次运行的原始日志 |
-| `testing/` | 现有命令的检查范围、手动验证方式 | 未接入的测试计划、原始日志与验证流水账 |
+| 子目录 | 内容范围 |
+| --- | --- |
+| `getting-started/` | 容器环境搭建、工具链配置、日常编译运行与 GDB 调试步骤 |
+| `architecture/` | 当前已实现的模块划分、启动流程、物理内存管理、Trap 与最小任务机制 |
+| `development/` | 编码规范、`Makefile`/`justfile` 命令分工、离线依赖（`vendor/`）更新与提交流程 |
+| `testing/` | 静态检查、`ktest` 启动期自检套件覆盖范围及手动故障注入验证方法 |
 
-文档只描述当前代码、配置和约束，不预设后续模块或目录。变更代码结构、工具链或运行约定时，同步更新对应页面。命令需注明宿主或容器内的执行位置。
+> **文档维护约定：** `docs/` 仅记录当前仓库已落地的设计与命令，不提前堆砌尚未实现的功能设想。调整模块边界、构建脚本或运行参数时，请同步更新对应文档，并标明命令是在**宿主机**还是**开发容器内**执行。

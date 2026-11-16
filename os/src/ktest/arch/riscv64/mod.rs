@@ -1,4 +1,4 @@
-//! 仅由 feature 启用的真实 trap 探针；不模拟执行，也不提供生产环境用户内存策略。
+//! RISC-V 64 Trap 与特权级切换自检（仅在启用 `ktest` feature 时编译）。
 
 use core::arch::{asm, global_asm};
 
@@ -20,8 +20,7 @@ extern "C" {
 }
 
 unsafe extern "C" fn run_user_shim(context: &mut TrapContext) {
-    // SAFETY: 汇编 wrapper 仅在 trap 初始化后使用内核测试独占的 context、
-    // 固定用户代码及有效的私有栈调用。
+    // SAFETY: 汇编探针仅在 `trap::init` 完成后，使用当前测试独占的 `context`、固定探针代码与私有测试栈调用本函数。
     unsafe { run_user(context) };
 }
 
@@ -51,7 +50,7 @@ fn assert_kernel_environment() {
     let scratch: usize;
     let status: usize;
     let thread_pointer: usize;
-    // SAFETY: 这些探针仅在单个 boot hart 的 S-mode 测试中执行。
+    // SAFETY: 在主核 S-mode 下只读查询当前 CSR 与 `tp` 寄存器，无任何副作用。
     unsafe {
         asm!(
             "csrr {scratch}, sscratch",
@@ -64,7 +63,7 @@ fn assert_kernel_environment() {
         );
     }
     assert_eq!(scratch, 0, "kernel sscratch invariant");
-    // sret 按架构规则设置 SPIE=1，但当前 SIE 必须保持为零。
+    // `sret` 会按硬件规范将 `SPIE` 置 1，但 `SIE` 及浮点/向量扩展位必须保持为 0。
     assert_eq!(
         status & (DISABLED_STATUS & !(1 << 5)),
         0,
@@ -88,8 +87,7 @@ fn assert_kernel_registers(context: &TrapContext) {
     }
 }
 
-/// 仅识别此内核测试拥有的两个精确 supervisor breakpoint PC。
-/// 其他 trap 仍由共用的内核致命 trap 策略处理。
+/// 拦截并处理本测试模块专属的两个 S-mode `ebreak` 探针地址；其余内核异常返回 `false` 交由全局 panic 处理。
 pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
         return false;
@@ -105,11 +103,10 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     assert!(context.bad_addr() == 0 || context.bad_addr() == context.pc());
     if context.pc() == outer {
         assert_kernel_registers(context);
-        // SAFETY: 此汇编叶函数在当前对齐的内核栈上触发一个已知 breakpoint；
-        // 下方分支会处理其精确 PC。
+        // SAFETY: 在已 16 字节对齐的当前内核栈上触发内层同步断点，由本函数的 `nested` 分支拦截并跳过。
         unsafe { riscv_kernel_test_nested() };
         assert_kernel_environment();
-        assert_kernel_registers(context); // 内层 frame 不得与此外层 frame 重叠。
+        assert_kernel_registers(context); // 验证内层 Trap 栈帧未覆盖外层保存的寄存器。
         for (index, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
             if index != 2 {
                 *value = 0x200 + index;
@@ -118,10 +115,9 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     } else {
         assert_eq!(context.sp() & 15, 0, "nested kernel sp alignment");
     }
-    // 除初始硬件状态保存外，也测试内核返回时的状态清理：清除 SPP
-    // 不得返回 U mode，且这些中断及扩展位必须被清除。
+    // 故意在保存的 `sstatus` 中清零 `SPP` 并置位禁用位，验证 `.Lrv_return_kernel` 能否强制修正回安全的 S-mode 状态。
     context.sstatus = (context.sstatus & !(1 << 8)) | DISABLED_STATUS;
-    context.set_pc(context.pc() + 4); // 两处均强制使用非压缩指令。
+    context.set_pc(context.pc() + 4); // `probes.S` 已禁用压缩指令，两条 `ebreak` 均为 4 字节。
     true
 }
 
@@ -146,18 +142,15 @@ fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usi
     assert_kernel_environment();
 }
 
-/// 测试异常解码、嵌套 S-mode ebreak 与用户态现场切换。
-///
-/// 用户探针依赖 bare mode 下允许访问 RAM 的固件 PMP；不提供隔离。
+/// 验证 `scause` 解码、S-mode 嵌套断点恢复以及 U-mode 上下文往返切换。
 pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     assert_cause_decoding();
     let mut kernel_call = TrapContext::user(0x1000, 0x2000);
-    kernel_call.scause = 9; // S-mode ecall 不是用户 syscall。
+    kernel_call.scause = 9; // S-mode `ecall` 不能当成用户态系统调用处理。
     kernel_call.sstatus = 1 << 8;
     crate::syscall::tests::assert_rejected(&mut kernel_call);
     assert_kernel_environment();
-    // SAFETY: 汇编保存内核 ABI，加载哨兵寄存器值，
-    // 并触发 handle_kernel_test 识别的精确内核测试 breakpoint。
+    // SAFETY: 汇编探针先备份调用栈 ABI 寄存器，再写入测试特征值并触发由 `handle_kernel_test` 拦截的断点。
     assert_eq!(
         unsafe { riscv_kernel_test_kernel() },
         1,
@@ -172,10 +165,9 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     let float = env.address(riscv_kernel_test_user_float as *const () as usize);
     let mut context = TrapContext::user(first, stack);
     set_user_registers(&mut context, 0x300, stack);
-    context.sstatus = usize::MAX; // 入口必须丢弃恶意特权位。
-                                  // SAFETY: 固定用户代码与对齐私有栈位于 PMP 可访问的 RAM 中；
-                                  // 汇编 wrapper 保留有效的内核 gp/tp，并在恢复调用者状态前
-                                  // 检查 Rust run_user 调用的 ABI。
+    // 验证 `run_user` 入口会强制覆写恶意的 `sstatus`。
+    context.sstatus = usize::MAX;
+    // SAFETY: 用户探针与对齐的私有测试栈均在 RAM 中；汇编包装函数在恢复自身栈帧前会校验内核 ABI 寄存器是否完好。
     assert_eq!(
         unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
@@ -184,10 +176,9 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     assert_user_context(&context, 0x300, stack, first, 8);
     assert_eq!(context.bad_addr(), 0);
 
-    context.set_pc(second); // 跳过 ecall 后故意设置的非法指令。
+    context.set_pc(second); // 跨过 `first` 末尾故意放置的非法指令，跳到第二个探针。
     set_user_registers(&mut context, 0x400, stack - 16);
-    // SAFETY: 使用与上文相同的有效私有内存和固定 trap 代码；
-    // 再次进入时必须采用修改后的用户 context，且仍保留调用 ABI。
+    // SAFETY: 使用修改后的 PC、GPR 与栈指针再次进入同一受控探针环境。
     assert_eq!(
         unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
@@ -198,7 +189,7 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
 
     context.set_pc(privileged);
     set_user_registers(&mut context, 0x500, stack - 32);
-    // SAFETY: 此 CSR 指令必须在 U mode 触发异常，且不访问数据。
+    // SAFETY: 在 U-mode 下执行写 `sscratch` 特权指令，必须触发非法指令异常并返回内核。
     assert_eq!(
         unsafe { riscv_kernel_test_call_user(&mut context) },
         1,
@@ -209,7 +200,7 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
 
     context.set_pc(float);
     set_user_registers(&mut context, 0x600, stack - 48);
-    // SAFETY: 固定 FP 指令必须在 FS Off 时触发异常，且不访问 RAM。
+    // SAFETY: `FS = Off` 时在 U-mode 下执行浮点指令，必须触发非法指令异常并返回内核。
     assert_eq!(
         unsafe { riscv_kernel_test_call_user(&mut context) },
         1,

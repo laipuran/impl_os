@@ -1,6 +1,7 @@
-//! 从字节切片解析启动内存所需的 FDT 信息，不读取物理地址。
+//! 扁平设备树（FDT / DTB）物理内存与保留区解析器。
 //!
-//! 不进行设备枚举，也不分配动态保留区；原始地址读取和启动存储保留由架构层负责。
+//! 本模块仅在安全的字节切片（`&[u8]`）上解析启动内存布局（RAM、保留表、`/reserved-memory` 与 `initrd`），
+//! 不涉及裸指针解引用或外设枚举。原始 FDT 地址映射及 FDT 本体空间的保留由 [`crate::arch::boot_data`] 负责。
 
 use super::{boot_memory::BootMemory, regions::Region};
 
@@ -13,7 +14,11 @@ pub use header::total_size;
 use header::Blob;
 pub(crate) use header::HEADER_SIZE;
 
-/// 校验并解析完整 FDT，拒绝截断、重叠的数据块及不支持的内存描述。
+/// 校验并解析完整的设备树字节切片，提取物理 RAM 与启动保留区。
+///
+/// # Errors
+///
+/// 当 FDT 头部损坏、数据块截断或重叠、节点结构不合法，或包含不支持的动态保留区/寻址格式时返回错误。
 pub fn parse(blob: &[u8]) -> Result<BootMemory, &'static str> {
     tree::parse(Blob::parse(blob)?)
 }

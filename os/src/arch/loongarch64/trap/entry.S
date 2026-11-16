@@ -2,8 +2,7 @@
 .balign 4096
 .global __loongarch_trap_entry
 __loongarch_trap_entry:
-    # 原值保存到 SAVE0/SAVE1 前，仅修改 t0 和 sp。
-    # 根据 PRMD.PPLV 选择内核栈，绝不信任用户控制的 sp。
+    # 先把 $t0 和 $sp 暂存到 SAVE0 (0x30) 与 SAVE1 (0x31)，再根据 PRMD.PPLV 判断异常来源特权级。
     csrwr $t0, 0x30
     csrwr $sp, 0x31
     csrrd $t0, 0x1
@@ -15,7 +14,7 @@ __loongarch_trap_entry:
     b .Lsave_context
 .Lfrom_user:
     csrrd $sp, 0x32
-    # 直接保存到可信上下文，绝不写入用户栈。
+    # 从 SAVE2 指向的内核切换帧首槽取出 `TrapContext` 指针，直接将用户寄存器写入该结构，绝不触碰用户栈。
     ld.d $sp, $sp, 0
 .Lsave_context:
     st.d $zero, $sp, {gpr} + {word} * 0
@@ -52,6 +51,7 @@ __loongarch_trap_entry:
     st.d $t0, $sp, {gpr} + {word} * 12
     csrrd $t0, 0x31
     st.d $t0, $sp, {gpr} + {word} * 3
+    # 检查 TLBRERA (0x8a) 最低位 IsTLBR：若为 1，说明当前走的是 TLB 重填入口。
     csrrd $t0, 0x8a
     andi $t1, $t0, 1
     bnez $t1, .Lcapture_refill
@@ -65,7 +65,8 @@ __loongarch_trap_entry:
     st.d $t1, $sp, {badv}
     b .Ldispatch_context
 .Lcapture_refill:
-    # 重填专用 CSR 不会覆盖普通 ERA/PRMD。
+    # 清除 TLBRERA 低 2 位（含 IsTLBR 标志）得到 4 字节对齐的异常 PC；
+    # 将 TLBRPRMD (0x8f) 的 PWE（bit 4）右移对齐到 PRMD.PWE（bit 3），并在保存的 estat 最高位打上软件重填标记。
     bstrins.d $t0, $zero, 1, 0
     st.d $t0, $sp, {era}
     csrrd $t0, 0x8f
@@ -80,11 +81,10 @@ __loongarch_trap_entry:
     st.d $t1, $sp, {estat}
     csrrd $t1, 0x89
     st.d $t1, $sp, {badv}
-    # 嵌套的普通陷阱必须使用自身的 ERA/PRMD 执行 ERTN。
+    # 清零 TLBRERA（清除 IsTLBR），使后续若发生内核同步嵌套异常，其 `ertn` 能按普通异常恢复 ERA/PRMD。
     csrwr $zero, 0x8a
 .Ldispatch_context:
-    # 所有暂存寄存器原值和异常 CSR 均已保存到当前栈帧。嵌套的
-    # 内核同步陷阱可安全复用 SAVE0/SAVE1 和 ERA/PRMD。
+    # 至此 SAVE0/SAVE1 及异常 CSR 均已落栈，可安全容忍后续内核处理函数中的同步嵌套异常。
     andi $t0, $t0, 3
     bnez $t0, .Lreturn_user_trap
     csrrd $tp, 0x33
@@ -92,9 +92,9 @@ __loongarch_trap_entry:
     bl __loongarch_handle_kernel
     b .Lreturn_kernel
 
-# TLBRENTRY 使用物理地址，重填入口处 DA=1、PG=0。先跳转到高位 PC
-# 的物理别名（直接地址模式忽略 PALEN 以上的位），再在高位内核
-# 直接映射窗口内执行时开启分页。
+# TLBRENTRY 物理入口：触发 TLB 重填时硬件自动置 `CRMD.DA = 1, PG = 0`（直接地址翻译模式）。
+# 先跳到带 `0x9000_0000_0000_0000` 高位前缀的虚拟地址（直接地址模式下硬件忽略物理地址位宽之外的高位），
+# 随后再写 CRMD 开启映射模式（`DA = 0, PG = 1`），平滑切回内核 DMW0 窗口。
 .balign 4096
 .global __loongarch_refill_entry
 __loongarch_refill_entry:

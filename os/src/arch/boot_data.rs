@@ -1,28 +1,28 @@
-//! 读取架构已建立映射的启动数据，将裸地址访问与安全的 FDT 解析分开。
+//! 架构层 FDT 原始内存借用封装：将裸地址边界检查与纯安全的切片解析解耦。
 
 use crate::mm::{boot_memory::BootMemory, fdt, regions::Region};
 
-/// 借用已映射的 FDT 存储；不代表其节点结构或内存描述已经通过解析。
+/// 对已映射 FDT 字节切片及其物理占用区间的借用封装（构造成功仅代表头部与长度合法，尚未解析内部节点）。
 pub(super) struct MappedFdt<'a> {
     bytes: &'a [u8],
     storage: Region,
 }
 
 impl MappedFdt<'_> {
-    /// 检查头部和平台容量，并借用头部声明的完整 FDT。
+    /// 校验 FDT 地址对齐、头部魔数与平台最大容量限制，并构造覆盖完整 FDT 的字节切片。
     ///
-    /// `physical` 仅记录物理占用，不用于解引用；`capacity` 是平台允许的最大长度。
+    /// `physical` 仅用于记录 FDT 本体占用的物理区间（不会直接解引用）；`mapped` 为当前可读取该 FDT 的访问地址；
+    /// `capacity` 为平台允许该 FDT 占用的最大字节数。
     ///
     /// # Errors
     ///
-    /// 地址、头部或物理存储区间无效，或总长度超过平台容量时返回错误。
+    /// 当 `physical` 未按 8 字节对齐、`mapped` 为空或溢出、FDT 头部无效，或 `totalsize` 超出 `capacity` 时返回错误。
     ///
     /// # Safety
     ///
-    /// 通过地址检查且容量足够时，`mapped` 指向的头部必须可读。
-    /// 如果头部声明的总长度通过校验且不超过 `capacity`，完整范围也必须可读。
-    /// 这些字节须在返回值的借用期间保持有效且不变。用于真实启动内存管理时，调用者
-    /// 还须保证 `physical` 是该映射对应的物理地址。
+    /// - 当地址对齐检查通过且 `capacity >= fdt::HEADER_SIZE` 时，`mapped` 起至少 `fdt::HEADER_SIZE`（40 字节）必须可读。
+    /// - 当头部校验通过且声明的总长度 `size <= capacity` 时，`mapped` 起共 `size` 字节在返回值的生命周期内必须持续有效、可读且不被修改。
+    /// - 若用于启动期真实物理内存管理，调用者还需保证 `physical` 确实是 `mapped` 对应的物理起始地址。
     pub(super) unsafe fn from_raw(
         physical: usize,
         mapped: usize,
@@ -35,7 +35,7 @@ impl MappedFdt<'_> {
             return Err("FDT exceeds platform storage");
         }
 
-        // SAFETY: 调用者保证头部可读且不变；已检查空地址、地址溢出和头部容量。
+        // SAFETY: 已校验非空、无地址溢出且容量足以容纳 40 字节头部；调用方保证头部内存可读且不变。
         let header = unsafe { core::slice::from_raw_parts(mapped as *const u8, fdt::HEADER_SIZE) };
         let size = fdt::total_size(header)?;
         if size > capacity || mapped.checked_add(size).is_none() {
@@ -43,21 +43,19 @@ impl MappedFdt<'_> {
         }
         let storage = Region::new(physical, size)?;
 
-        // SAFETY: 调用者保证校验后的完整范围在返回值的借用期间可读且不变；总长度
-        // 已限制为切片可表示的范围，且虚拟地址与物理区间均无溢出。
+        // SAFETY: 已校验 `size <= capacity` 且虚拟/物理区间均无溢出；调用方保证完整 FDT 范围在借用期间可读且不变。
         let bytes = unsafe { core::slice::from_raw_parts(mapped as *const u8, size) };
         Ok(Self { bytes, storage })
     }
 
-    /// 安全解析借用的字节，并将 FDT 本体的物理占用追加到启动保留区。
+    /// 解析 FDT 中的物理内存布局，并将 FDT 本体占用的物理区间追加到保留列表中。
     ///
     /// # Errors
     ///
-    /// FDT 节点结构或内存描述无效、不受支持时返回错误。
+    /// 当 FDT 节点结构损坏或内存描述超出支持范围时返回错误。
     pub(super) fn parse_memory(&self) -> Result<BootMemory, &'static str> {
         let mut memory = fdt::parse(self.bytes)?;
-        // TODO: 这里我们不对 `FDT` 进行完全解析，暂时把 `FDT` 放在 `mm`，后续
-        // 可以移出为单独模块，可以不保留 `FDT`。
+        // TODO: 目前仅提取内存布局信息；后续若将完整设备树解析独立为外设模块，可按需调整 FDT 保留策略。
         memory.reserved.push(self.storage);
         Ok(memory)
     }

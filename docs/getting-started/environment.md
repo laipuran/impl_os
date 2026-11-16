@@ -1,41 +1,51 @@
-# 环境与 Dev Container
+# 开发环境与 Dev Container 配置
 
-## 固定环境
+## 基础环境与工具链规格
 
-- 基础镜像：`zhouzhouyi/os-contest:20260510`，Dev Container 固定 digest，避免 tag 漂移。
-- 开发镜像：从上述原始镜像派生，安装校验 SHA256 的 just **1.40.0**，以及固定 Rust 工具链配套的 `rust-analyzer`、`rust-src`；不替换编译器、QEMU 或固件。
-- 开发语言：Rust；`nightly-2025-01-18`，edition 2021。
-- 目标：`riscv64gc-unknown-none-elf`、`loongarch64-unknown-none`。
-- 当前依赖 `log` 和 `thiserror`，均禁用默认特性以用于 `no_std`；`thiserror` 的派生宏在宿主编译，生成的原因格式化代码不依赖 `std`。依赖版本由 `Cargo.lock` 锁定，首次构建直接使用仓库已提交的 `vendor/`，无需执行 `cargo fetch` 或 `just vendor`。新增或更新依赖的流程见[开发约定](../development/README.md#更新离线依赖)。当前内核不需要 `cargo install` 或通过交叉 GCC 链接。
+- **官方基础镜像**：`zhouzhouyi/os-contest:20260510`（Dockerfile 中通过 SHA256 digest 锁定版本，防止标签漂移）。镜像内置 Ubuntu 24.04.4、QEMU 10.0.2 以及 RISC-V 默认固件 OpenSBI 1.5.1。
+- **本地开发镜像**：基于上述官方镜像构建（`impl-os-dev:20260510`），仅额外安装固定版本的 `just`（1.40.0，校验 SHA256）以及当前 Rust 工具链对应的 `rust-analyzer` 和 `rust-src`，不改动比赛镜像自带的编译器、QEMU 或固件。
+- **Rust 工具链**：`nightly-2025-01-18`（Edition 2021），裸机编译目标为 `riscv64gc-unknown-none-elf` 与 `loongarch64-unknown-none`。
+- **第三方依赖**：当前使用 `buddy_system_allocator`、`log` 和 `thiserror`（均关闭默认特性以适配 `no_std`）。所有依赖版本由 `Cargo.lock` 锁定，源码已提交在 `vendor/` 目录下，首次克隆仓库即可直接离线编译。
 
-该镜像提供 Ubuntu **24.04.4**、QEMU **10.0.2** 和 RISC-V 默认固件 OpenSBI **1.5.1**。开发环境固定这套工具；最终比赛的启动参数和资源限制由比赛规则确定。
+## 方式一：使用 VS Code Dev Containers（推荐）
 
-## 进入容器
+1. 确保宿主机已安装 Docker（支持运行 `linux/amd64` 容器）及 VS Code 的 **Dev Containers** 扩展。
+2. 用 VS Code 打开仓库根目录，执行 **Dev Containers: Reopen in Container**。
+   - 首次拉取和解压基础镜像约需 6 GB 磁盘空间；若宿主机为 Apple Silicon 等 ARM 架构，Docker 会通过 `linux/amd64` 仿真运行。
+3. 容器启动后会自动执行 `just doctor` 检查工具链与模拟器是否就绪。
 
-1. Docker 可运行 Linux/amd64 容器；安装 VS Code Dev Containers 扩展。
-2. 打开仓库，执行 **Reopen in Container**。
-3. 初次下载镜像约 6 GB，留出镜像解包和构建空间。容器平台固定 Linux/amd64，ARM 宿主需要额外的宿主架构仿真。
-4. 构建开发镜像时准备 just 和 Rust 编辑器组件，完成后自动执行 `just doctor`。doctor 只读检查，缺少必需开发工具时失败。
+> **关于语言服务器：** 容器内配置了 `/home/dev/.cargo/bin/rust-analyzer`，通过 `rustup` 调用与 `nightly-2025-01-18` 配套的语言服务器，避免 VS Code 扩展自动下载的新版 `rust-analyzer` 与旧版 nightly 标准库产生兼容问题。`rust-analyzer` 与 `rust-src` 仅在构建开发镜像时安装，不写入 [`rust-toolchain.toml`](../../rust-toolchain.toml)，以免影响比赛评测构建。
 
-VS Code 使用 `/home/dev/.cargo/bin/rust-analyzer`，由 rustup 选择项目固定工具链的语言服务器，而不是扩展自带的较新版本。`rust-src` 用于分析 `core` 等标准库代码。这两个组件只属于开发环境，不加入比赛构建的 `rust-toolchain.toml` 组件要求。
+## 方式二：在宿主机使用命令行容器
 
-开发容器使用普通用户 `dev`。Linux 上，VS Code 在创建容器时匹配宿主 UID/GID，CLI 则由 `just image-build` 在镜像构建时匹配并缓存；Windows/macOS 使用默认 UID/GID `1000:1000`，不使用 Git Bash 的账户数字标识。启动 CLI 容器时不再迁移工具链所有权。
+如果不使用 VS Code，可在**宿主机**通过 `just` 直接管理开发容器（Windows 建议使用 Git Bash，[`justfile`](../../justfile) 已自动禁用 MSYS 路径转换）：
 
-已有容器需要执行 **Dev Containers: Rebuild Container**；终端用户重新执行 `just image-build`。Linux 上更换宿主账户或 UID/GID 后，也需重新构建 CLI 镜像。`just judge-build` 使用相同的平台策略修正两个导出 ELF 的所有权，确保后续开发容器可覆盖它们。
+```bash
+just image-pull                  # 拉取固定 digest 的官方比赛镜像
+just image-build                 # 构建本地开发镜像 impl-os-dev:20260510
+just container                   # 启动并进入容器交互式 bash
+just container just check        # 在容器内单次执行命令
+just judge-build                 # 使用未修改的官方镜像断网编译，验证评测构建契约
+```
 
-如果旧容器留下了 root 所有的文件，先关闭旧容器，再在宿主仓库根确认清单并修复一次：
+## 容器用户与文件权限
+
+开发容器默认以普通用户 `dev` 运行：
+- **Linux 宿主机**：VS Code Dev Containers 会在容器创建时自动映射宿主机的 UID/GID；命令行工作流则在执行 `just image-build` 时将当前宿主机的 UID/GID 写入开发镜像。若更换了 Linux 宿主机账号，请重新运行 `just image-build`。
+- **Windows / macOS 宿主机**：统一使用默认 UID/GID `1000:1000`。
+- `just judge-build` 在官方原始镜像中以 `root` 编译完成后，会自动将导出的 `kernel-rv` 和 `kernel-la` 属主修正为上述 UID/GID，确保后续开发容器能够正常覆盖。
+
+如果早期的容器在工作区留下了 `root` 属主的文件，可先关闭容器，再在 Linux 宿主机仓库根目录排查并修复：
 
 ```bash
 find "$PWD" -xdev -uid 0 -print
-# 确认处于自己的仓库，且清单都是旧容器生成的文件后执行：
+# 确认列出的文件均为旧容器生成后，修改属主：
 sudo find "$PWD" -xdev -uid 0 -exec chown --no-dereference "$(id -u):$(id -g)" {} +
 ```
 
-不启用 `--privileged`、不挂载 Docker socket、不暴露 GDB 端口。
+## 手动补装 Rust 组件
 
-## 补齐 Rust（仅在 doctor 报缺失时）
-
-在开发容器终端执行显式联网任务，不把它加入 `make all`：
+若在自定义环境中运行 `just doctor` 提示缺少 Rust 组件，可在**开发容器内**联网执行：
 
 ```bash
 just setup
@@ -43,20 +53,4 @@ just doctor
 make all
 ```
 
-`cargo`/`rustc` shim 会读取 `rust-toolchain.toml`，缺少指定工具链/组件时也可能自动联网。`--offline` 约束 Cargo，不是 rustup。配置文件只声明构建所需的组件/targets，不把 rustfmt/Clippy 变成评测构建的隐式安装要求。开发组件由 `just setup` 显式准备，并禁止 rustup 自更新。
-
-## 无 VS Code 的等价入口（在宿主运行）
-
-```bash
-just image-pull
-just image-build
-just container
-# 或一次执行容器内任务：
-just container just check
-# 使用未修改的比赛基础镜像，断网复核：
-just judge-build
-```
-
-宿主需要 Docker、just 和常规 Shell 工具；Windows 使用 Git Bash，Just 的 Docker 调用会禁用 MSYS 自动路径转换，避免改写容器路径，无需手动设置环境变量。容器内不需要 Docker。`container` 默认不自动拉取镜像，显式执行前两个任务。镜像唯一配置源是 `.devcontainer/Dockerfile` 的 `ARG CONTEST_IMAGE`，Just 与 VS Code 共用同一 Dockerfile，构建和运行均显式选择 `linux/amd64`。
-
-镜像升级需要同步核对 QEMU、固件和 Rust target，并更新对应配置与环境说明。
+`just setup` 会显式安装 [`rust-toolchain.toml`](../../rust-toolchain.toml) 指定的工具链、双架构 target 以及 `rustfmt`、`clippy`、`llvm-tools-preview`、`rust-analyzer`、`rust-src`。注意 Cargo 的 `--offline` 仅禁止下载 crate 依赖，不会阻止 `rustup` 尝试联网安装缺失的工具链，因此评测环境测试（`just judge-build`）会同时设置 `RUSTUP_AUTO_INSTALL=0`。

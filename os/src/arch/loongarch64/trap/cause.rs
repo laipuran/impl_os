@@ -1,20 +1,20 @@
-//! 解码 ESTAT，包括重填入口使用的软件标记。
+//! LoongArch 64 `ESTAT` 寄存器与软件 TLB 重填标记解码。
 
 use thiserror::Error;
 
-/// 陷阱入口保存的中断位图或同步异常。
+/// 从保存的 `estat` 解码出的中断或同步异常原因。
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum TrapCause {
-    /// Ecode 为零；ESTAT.IS 表示当前待处理的中断源。
+    /// `Ecode == 0`：异步中断（由 `ESTAT.IS` 位图标识挂起的中断源）。
     #[error("interrupt: {0}")]
     Interrupt(InterruptCause),
-    /// 同步异常，包括带软件标记的 TLB 重填。
+    /// 同步异常（含带软件标记的 TLB 重填异常）。
     #[error("exception: {0}")]
     Exception(ExceptionCause),
 }
 
 impl TrapCause {
-    /// 解码保存的 ESTAT，第 63 位的重填标记优先于残留的 Ecode。
+    /// 解码保存的 `estat` 值；第 63 位的软件 TLB 重填标记优先于残留的 `Ecode`。
     pub(super) fn from_estat(estat: usize) -> Self {
         if estat & (1usize << 63) != 0 {
             return Self::Exception(ExceptionCause::TlbRefill);
@@ -29,25 +29,27 @@ impl TrapCause {
     }
 }
 
-/// ESTAT.IS 是位图而非中断编号；同时置位的所有中断都会保留。
+/// `ESTAT.IS`（位 `0..=12`）中断状态解码。
+///
+/// 由于 `ESTAT.IS` 是位图而非单一编号，若同时有多个中断置位（或全为 0），则原样保留在 [`Self::Pending`] 中。
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum InterruptCause {
-    /// 软件中断 0 或 1。
+    /// 软件中断 `SWI0` / `SWI1`（`IS[0..=1]`）。
     #[error("software interrupt {0}")]
     Software(usize),
-    /// 硬件中断 0 至 7，对应 IS 的第 2 至 9 位。
+    /// 硬件外部中断 `HWI0..HWI7`（`IS[2..=9]`）。
     #[error("hardware interrupt {0}")]
     Hardware(usize),
-    /// 性能监控计数器中断，对应 IS 的第 10 位。
+    /// 性能监测计数溢出中断 `PMI`（`IS[10]`）。
     #[error("performance counter interrupt")]
     PerformanceCounter,
-    /// 定时器中断，对应 IS 的第 11 位。
+    /// 定时器中断 `TI`（`IS[11]`）。
     #[error("timer interrupt")]
     Timer,
-    /// 处理器间中断，对应 IS 的第 12 位。
+    /// 核间中断 `IPI`（`IS[12]`）。
     #[error("interprocessor interrupt")]
     Interprocessor,
-    /// 待处理位为零、有多个置位或无法识别时，完整保留且不设优先级。
+    /// 没有置位或有多个中断位同时置位时，保留完整的 `IS` 掩码。
     #[error("pending interrupt mask {0:#05x}")]
     Pending(usize),
 }
@@ -68,70 +70,70 @@ impl From<usize> for InterruptCause {
     }
 }
 
-/// ESTAT.Ecode/EsubCode；保留未知组合，不推测其含义。
+/// `ESTAT.Ecode` 与 `EsubCode` 同步异常原因码。
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ExceptionCause {
-    /// 读取时页无效。
+    /// `PIL`（`Ecode = 0x1`）：load 操作页无效异常。
     #[error("page invalid on load")]
     PageInvalidLoad,
-    /// 写入时页无效。
+    /// `PIS`（`Ecode = 0x2`）：store 操作页无效异常。
     #[error("page invalid on store")]
     PageInvalidStore,
-    /// 取指时页无效。
+    /// `PIF`（`Ecode = 0x3`）：取指操作页无效异常。
     #[error("page invalid on instruction fetch")]
     PageInvalidFetch,
-    /// 页修改异常。
+    /// `PME`（`Ecode = 0x4`）：页修改异常。
     #[error("page modification fault")]
     PageModification,
-    /// 页不可读。
+    /// `PNR`（`Ecode = 0x5`）：页不可读异常。
     #[error("page not readable")]
     PageNotReadable,
-    /// 页不可执行。
+    /// `PNX`（`Ecode = 0x6`）：页不可执行异常。
     #[error("page not executable")]
     PageNotExecutable,
-    /// 页特权等级异常。
+    /// `PPI`（`Ecode = 0x7`）：页特权等级不合规异常。
     #[error("page privilege fault")]
     PagePrivilege,
-    /// 指令地址错误，Ecode 为 8，EsubCode 为 0。
+    /// `ADEF`（`Ecode = 0x8, EsubCode = 0`）：取指地址错异常。
     #[error("instruction address error")]
     InstructionAddressError,
-    /// 数据地址错误，Ecode 为 8，EsubCode 为 1。
+    /// `ADEM`（`Ecode = 0x8, EsubCode = 1`）：访存指令地址错异常。
     #[error("data address error")]
     DataAddressError,
-    /// 地址对齐错误。
+    /// `ALE`（`Ecode = 0x9`）：地址非对齐异常。
     #[error("address alignment error")]
     AddressMisaligned,
-    /// 边界检查错误。
+    /// `BCE`（`Ecode = 0xa`）：边界约束检查错异常。
     #[error("bound check error")]
     BoundCheck,
-    /// 显式系统调用。
+    /// `SYS`（`Ecode = 0xb`）：系统调用异常。
     #[error("system call")]
     SystemCall,
-    /// 显式断点。
+    /// `BRK`（`Ecode = 0xc`）：断点异常。
     #[error("breakpoint")]
     Breakpoint,
-    /// 非法指令。
+    /// `INE`（`Ecode = 0xd`）：指令不存在（非法指令）异常。
     #[error("illegal instruction")]
     IllegalInstruction,
-    /// 指令特权等级错误。
+    /// `IPE`（`Ecode = 0xe`）：指令特权等级错异常。
     #[error("instruction privilege error")]
     InstructionPrivilege,
-    /// 浮点执行未启用。
+    /// `FPD`（`Ecode = 0xf`）：浮点指令未使能异常。
     #[error("floating point disabled")]
     FloatingPointDisabled,
-    /// LSX 执行未启用。
+    /// `SXD`（`Ecode = 0x10`）：128 位向量（LSX）指令未使能异常。
     #[error("LSX disabled")]
     LsxDisabled,
-    /// LASX 执行未启用。
+    /// `ASXD`（`Ecode = 0x11`）：256 位向量（LASX）指令未使能异常。
     #[error("LASX disabled")]
     LasxDisabled,
-    /// 浮点异常。
+    /// `FPE`（`Ecode = 0x12, EsubCode = 0`）：基础浮点运算异常。
     #[error("floating point exception")]
     FloatingPoint,
-    /// 专用重填入口；此时 ESTAT.Ecode 是残留值，不应解码。
+    /// 由 `TLBRENTRY` 入口捕获并打上软件最高位标记的 TLB 重填异常。
     #[error("TLB refill")]
     TlbRefill,
-    /// 无法识别的 Ecode/EsubCode 组合，两个字段均完整保留。
+    /// 未识别的 `Ecode` / `EsubCode` 组合。
     #[error("unknown exception code {code}, subcode {subcode}")]
     Unknown { code: usize, subcode: usize },
 }

@@ -1,4 +1,4 @@
-//! 合成 QEMU direct boot 表的边界检查，不访问真实物理地址。
+//! LoongArch 64 QEMU direct boot EFI 启动表解析与 `DMW0` 映射转换测试。
 
 use alloc::{vec, vec::Vec};
 
@@ -24,7 +24,7 @@ fn fixture() -> Vec<u8> {
     put(&mut data, SYSTEM, 0x5453_5953_2049_4249);
     put(&mut data, SYSTEM + 104, 3);
     put(&mut data, SYSTEM + 112, CONFIG as u64);
-    // 先放一个不相关的配置项，FDT 和 initrd 的发现不能依赖表项索引。
+    // 第 0 项填入无关 GUID，确认解析器按 GUID 匹配而非硬编码表项下标。
     data[CONFIG..CONFIG + 16].fill(0xa5);
     data[CONFIG + 24..CONFIG + 40].copy_from_slice(&INITRD_GUID);
     put(&mut data, CONFIG + 40, INITRD as u64);
@@ -59,8 +59,8 @@ fn invalid_tables() {
         (CONFIG + 40, 2040),
         (CONFIG + 64, 0),
         (CONFIG + 64, 0x100001),
-        (INITRD, 1),     // 非零起点配零长度。
-        (INITRD + 8, 1), // 零起点配非零长度。
+        (INITRD, 1),     // 起始地址非零但长度为 0。
+        (INITRD + 8, 1), // 起始地址为 0 但长度非零。
     ] {
         let mut data = fixture();
         put(&mut data, offset, value);
@@ -96,7 +96,7 @@ fn direct_mapping() {
     assert!(mapped_address(usize::MAX, 4096).is_err());
 }
 
-/// 验证 GUID 查找、initrd、截断/溢出/重复表项，以及 DMW 地址检查。
+/// 验证 EFI 配置表 GUID 查找、`initrd` 解析、损坏表项拦截与 `DMW0` 地址转换。
 pub fn kernel_test() {
     valid_tables();
     invalid_tables();

@@ -1,106 +1,106 @@
-# 开发检查
+# 内核自检与测试验证
 
-## 命令覆盖范围
+## 1. 检查命令速览
 
-| 命令 | 检查范围 | 不覆盖 |
+| 命令 | 执行位置 | 覆盖范围 |
 | --- | --- | --- |
-| 容器内 `just check` | Rust 格式、双架构默认和 `ktest` 配置的 Clippy | 链接产物、启动行为、内核功能 |
-| 容器内 `just build` / `make all` | 两架构 ELF 构建与导出 | 启动及运行时语义 |
-| 宿主 `just judge-build` | 原始比赛镜像断网，过滤隐藏文件和目录，以空 Cargo 缓存及独立构建目录构建双架构 ELF | 启动、评分 |
-| 容器内 `just run rv` / `just run la` | 手动观察启动日志和进程退出 | 官方用户程序的正确性 |
-| 容器内 `just test [rv\|la] [release\|debug]` | 构建启用 `ktest` 的 ELF 并执行全部已接入内核自检；覆盖 trap、heap、syscall ABI、任务执行循环、物理区间、页框分配、FDT 内存解析、启动 FDT 存储读取及 LA 启动表 | 未实现的测试功能、官方用户程序 |
+| `just check` | 容器内 | 检查 `rustfmt` 格式，并对双架构的默认配置与 `ktest` 配置运行 Clippy（共 4 组） |
+| `just build` / `make all` | 容器内 | 离线编译并导出 `kernel-rv`、`kernel-la` |
+| `just judge-build` | 宿主机 | 在原始比赛镜像中断网、剔除隐藏文件与本地缓存，验证 `make all` 能否干净产出双架构 ELF |
+| `just run rv` / `just run la` | 容器内 | 启动正常内核，观察物理内存发现日志与关机/停机行为 |
+| `just test [rv\|la] [release\|debug]` | 容器内 | 编译开启 `ktest` feature 的内核并在 QEMU 中运行全部已接入的白盒自检套件 |
 
-当前有统一的启动期内核自检入口，通过静态具名测试组列表组织各模块测试，没有自动注册、名称筛选或官方测试集运行入口。格式和构建检查不能替代运行时功能测试。
+---
 
-`judge-build` 在容器临时目录中复制源码，排除隐藏文件和目录、本地 `target/`、`artifacts/` 及根目录已有 ELF；只将成功构建的两个 ELF 复制回仓库。原始镜像必须预先存在，并提供固定工具链及两个目标的标准库；命令不会拉取镜像或安装工具链。
+## 2. 启动期内核自检框架（`ktest`）
 
-## 当前运行行为
+由于内核是禁用标准测试 harness（`test = false`）的裸机二进制，项目通过 Cargo 特性 `ktest` 提供统一的启动期自检入口（位于 [`os/src/ktest/mod.rs`](../../os/src/ktest/mod.rs)）：
 
-正常启动时，共享入口清零 BSS，初始化日志、trap 和内核堆，再建立并输出物理内存地图，将可用区间交给页框分配器，输出总页数和空闲页数，不执行试分配或回收验证。内核随后输出架构名称；启用自检时先执行测试，最后调用 `arch::shutdown()`。
-
-RISC-V 使用 SBI System Reset 关机，固件支持该扩展时会退出 QEMU；LoongArch 尚未实现关机，输出提示后停放 CPU，需要手动退出 QEMU。panic 也会输出错误并停放 CPU，因此不能仅凭进程仍在运行就判断启动成功，必须检查串口输出。
-
-## 统一内核自检入口
-
-命令格式为 `just test [架构] [构建模式]`，默认架构 `rv`、模式 `release`。该命令统一启用 Cargo feature `ktest`，经现有 Make 构建入口导出 ELF，再调用 QEMU；`MEM`、`SMP` 环境变量与 `just run` 一致。一次运行执行所选架构的全部已接入测试；验证双架构时分别运行两个 QEMU 实例。
-
-`ktest` 只控制测试代码，不控制 trap、syscall ABI 或内存管理等正式能力。共享入口先正常初始化内核，再调用 `os/src/ktest/mod.rs` 中的 `run`，借用 `mm::init(boot_arg)` 返回的页框分配器；默认构建不编译测试入口、模块自检或汇编探针。这里使用 `#[cfg(feature = "ktest")]`，不是 Rust 的 `#[cfg(test)]` 或自定义 `#[cfg(ktest)]`，也不依赖 Cargo 测试 harness。
-
-自检源码和仅供自检使用的汇编集中在 `os/src/ktest/`，按 `mm/`、`boot/`、`arch/`、`syscall/` 和 `task/` 分组；架构专属探针与对应测试放在一起，共享 fixture 位于 `support/`，用户执行环境位于 `user_env.rs`。需要白盒访问的测试仍由原所属模块通过 `#[path = "..."]` 显式声明一次并保留原有条件编译，不扩大正式接口。新增独立测试组时，在 `ktest/mod.rs` 的 `SUITES` 列表中增加一个 `Suite { name, run }`，其中 `run` 接收页框分配器的共享引用且无返回值；无需使用分配器的现有测试可通过 `|_| kernel_test()` 适配。统一入口的 `user execution` 组建立可信环境，在同一有效期内依次执行 trap、syscall ABI 和任务测试。列表顺序就是执行顺序；通用执行循环在调用前输出测试组名称，只有所有测试组返回后才输出总成功标记。无需修改 `kernel_main` 或执行循环，不新增测试专用 feature 或 Just recipe。测试依赖的基础能力应由正常初始化提供，不能把另一组自检当作初始化入口。
-
-测试在启动 CPU 上关闭中断、依次执行，每组测试返回前必须恢复临时映射、机器状态并释放测试资源。失败直接走现有 panic 停机，不捕获后继续执行；故意触发致命异常或无法恢复状态的测试应在独立 QEMU 实例中验证，不加入这条顺序执行路径。
-
-## Trap 内核测试
-
-在开发容器内运行：
-
-```sh
-just test
-just test la
+```bash
+just test            # 默认运行 RISC-V (release) 自检
+just test la         # 运行 LoongArch (release) 自检
+just test rv debug   # 运行 RISC-V (debug) 自检
 ```
 
-两者分别构建启用 `ktest` 的 RISC-V / LoongArch release ELF，再启动 QEMU。trap 内核测试完成后输出 `<架构>: trap kernel tests passed`；只有全部测试完成，统一入口才输出 `<架构>: all kernel tests passed`。断言失败走 panic，不输出总成功标记。LoongArch 成功后仍停放，需 `Ctrl-a`、`x` 退出；自动运行时的超时本身既不是成功也不是失败，必须检查串口的总成功标记。
+### 组织方式与设计约定
 
-验证内容：
+- **零生产侵入**：`ktest` 仅在启用 `--features ktest` 时参与编译。正常启动流程完成日志、Trap 和内存分配器初始化后，将 `FrameAllocator` 的共享引用传给 `ktest::run(&frames)`。
+- **目录与白盒访问**：所有测试代码与专用汇编探针统一存放在 `os/src/ktest/` 下（按 `arch/`、`boot/`、`mm/`、`syscall/`、`task/` 分类），再由被测模块通过 `#[cfg(feature = "ktest")] #[path = "..."] mod tests;` 挂载。这样既保持了业务源码目录的整洁，又允许测试直接访问模块内部私有项。
+- **顺序执行与状态恢复**：`ktest::run` 按 `SUITES` 数组顺序依次执行各测试套件。每个套件在返回前必须恢复临时修改的硬件状态（如 LoongArch 的 `DMW1` 窗口）并归还借用的物理页框。任何断言失败都会直接触发内核 panic 并停机；只有全部套件通过才会打印最终的 `<arch>: all kernel tests passed`。
+- **注意 LoongArch 退出方式**：LoongArch 尚未实现主动关机，打印 `loongarch64: all kernel tests passed` 后会停在 `idle` 循环（需按 `Ctrl-a x` 退出）。判断自检是否通过必须以串口输出的成功标记为准，不能仅看 QEMU 是否退出。
 
-- 内核 breakpoint 的整数上下文保存/恢复，以及处理期间的同步嵌套异常。LoongArch handler 修改全部非零、非 SP GPR 后，汇编逐个检查恢复值和原始 SP，再恢复探针调用者，避免探针自身恢复掩盖 trap 恢复错误。
-- 用户态 `ecall` / `syscall` 返回内核，验证所有整数寄存器、异常 PC、原因和先前特权级。
-- 修改用户 PC、整数寄存器和栈指针后重新进入，确认恢复的是修改后的上下文。
-- 独立汇编包装经 C 调用边界执行 Rust `run_user`，在首次进入和修改现场后重入时检查内核调用 ABI。RISC-V 检查 s0–s11、有效的原始 gp/tp 和 SP；LoongArch 检查 fp/s0–s8、原始 tp/r21 和 SP。检查先于包装器自身恢复，返回控制流证明能够回到调用者，不要求 caller-saved 寄存器保持原值。
-- 输入恶意特权状态位仍只能进入 U/PLV3；实际执行特权指令必须异常。
-- 浮点关闭时执行浮点指令必须异常，而不是静默破坏未保存状态。
-- LoongArch 内核嵌套 refill、用户未映射取指及其后的正常 syscall；临时 DMW 修改同步失效缓存翻译。
-- 原因解码覆盖中断/异常编号空间分离、未知编号保留；LoongArch 额外覆盖多位待处理中断、异常子码及 refill 标记优先于旧 ESTAT。解码断言直接接入 `ktest`，不依赖禁用的 Cargo 测试 harness。
+---
 
-debug 模式直接使用 `just test rv debug` 或 `just test la debug`。自检映射只供固定可信探针使用，不提供进程隔离。恢复正常产物使用 `just build`；默认构建不启用自检。
+## 3. 各测试套件覆盖详情
 
-致命诊断应在独立 QEMU 实例中验证，不能加入顺序自检。可在 debug 内核安装 trap 后用 GDB 将 PC 改为零，分别观察 RISC-V instruction access fault 和 LoongArch TLB refill 的 panic 输出及停机路径；默认日志级别下也必须能看到原因、PC、保存状态、原始原因、故障地址和原始 SP。
+### 3.1 用户执行环境组（`user execution`）
 
-LoongArch 的 Rust 可调用汇编函数提供 ELF `FUNC` 类型和函数大小。构建 trap 内核测试后，可用 `readelf -Ws kernel-la` 检查 `__loongarch_run_user`、`__loongarch_kernel_test_kernel`、`__loongarch_kernel_test_nested`、`__loongarch_kernel_test_refill` 的类型及范围；GDB 中 `disassemble __loongarch_run_user` 应止于恢复路径的 `ertn`，不包含后续异常入口前的对齐填充。
+`user execution` 套件通过 `ktest::user_env::UserEnv` 准备一块 4 KiB 独占测试栈及临时用户态映射（RISC-V 利用 `satp = Bare` 下的固件 PMP；LoongArch 临时配置 `DMW1 = 0x18` 允许 PLV3 访问低地址 RAM，并在 `UserEnv` 销毁时清零 `DMW1` 及刷新 TLB），依次执行以下三项测试：
 
-## Heap 内核测试
+1. **架构 Trap 与上下文切换测试（`arch::trap::tests`）**：
+   - **异常原因解码**：验证中断与异常编号分离、未知编号保留；LoongArch 额外验证多位并发中断掩码、异常子码（`EsubCode`）以及软件重填标记（bit 63）优先于残留的 `ESTAT.Ecode`。
+   - **内核态断点与同步嵌套异常**：汇编探针向全部通用寄存器写入特征值后触发内核断点（`ebreak` / `break 0`），并在处理函数内部再次触发嵌套断点（LoongArch 还会额外触发一次内核态未映射地址的 TLB refill），验证外层栈帧不被内层覆盖、处理函数修改后的寄存器值能原样恢复，且返回前栈指针保持 16 字节对齐。
+   - **C ABI 保存与恢复校验**：通过独立的汇编包装函数调用 `run_user`，在恢复调用栈前逐一校验被调用者保存寄存器（RISC-V 的 `s0..s11`/`gp`/`tp`/`sp`；LoongArch 的 `fp`/`s0..s8`/`tp`/`r21`/`sp`）是否完好无损。
+   - **用户态降权与特权隔离**：故意在传入的 `TrapContext` 中填入全 1 的恶意状态位（`sstatus` / `prmd`），确认 `run_user` 强制降权至 U-mode / PLV3 且关闭中断与扩展；验证用户态执行 `ecall`/`syscall`、修改 PC/GPR/SP 后重入、越权访问特权 CSR 以及在 FPU 关闭时执行浮点指令均能精确捕获。
+   - **LoongArch 用户态 TLB Refill**：临时撤销 `DMW1` 后进入用户态触发取指 TLB refill，确认捕获的 `ERA`、`BADV` 与特权级正确，随后重新开启 `DMW1` 验证常规 `syscall` 仍可正常执行。
 
-在容器内执行 `just test rv` 或 `just test la`，统一入口会在 trap 测试后执行 heap 测试。该测试验证 `Box` 的页对齐、`Vec` 扩容与数据保持、超过堆总容量的 `try_reserve_exact` 返回错误，以及对象销毁和反复申请后全局堆实际占用恢复。
+2. **系统调用 ABI 测试（`syscall::tests`）**：
+   - 用户态探针连续发起 3 次系统调用，覆盖超过 32 位的调用号、全 1 字、最高位置 1 及负数参数，确认 `syscall::decode` 完整提取 6 个参数且 `syscall::complete` 仅更新返回值寄存器（`a0`）并将 PC 前移 4 字节。
+   - 探针在每次系统调用返回后将 `a0` 拷贝到下一次调用的第 6 个参数（`a5`），证明用户态确实观测到了超过 32 位的正返回值与负 errno。
+   - 验证非系统调用异常（如断点、S-mode/PLV0 系统调用、带残留 syscall 编码的 LoongArch TLB refill）会被 `decode` 和 `complete` 拒绝且不破坏原现场；验证当 `PC = usize::MAX - 3` 时，`complete` 能检测到 `PC + 4` 溢出并拒绝执行。
 
-布局和耗尽检查使用单独的、按 8 KiB 对齐的 8 KiB 静态内存池，不耗尽全局堆。测试检查不同大小与对齐的分配互不覆盖、写入数据保持、满堆返回失败、释放后的块复用，以及两个 4 KiB 伙伴块释放后能够满足 8 KiB 申请。全部通过后输出 `<架构>: heap kernel tests passed`，最后仍以统一入口的总成功标记为准。
+3. **最小任务循环测试（`task::tests`）**：
+   - 验证 `Task::run` 面对未知调用号（含低 32 位与 `exit` 相同但高 32 位非零的 64 位调用号）时能向用户态返回 `-ENOSYS`（-38）并继续运行。
+   - 验证 `exit`（93）和 `exit_group`（94）仅截取首个参数的低 8 位作为退出码，将状态置为 `Finished(Exited(code))`，且保持退出指令处的 PC 与 `a0` 不变。
+   - 验证已结束的任务再次调用 `run()` 会直接返回原退出状态，不会重复进入用户态。
+   - 验证用户态触发未处理断点（即便寄存器中伪造了 `a7 = 93`）会以 `Finished(Faulted)` 终止，且不影响后续新建任务的正常运行。
 
-独立堆耗尽检查不触发全局分配失败处理；实际不可恢复的分配失败会 panic 停机，必须在独立 QEMU 实例中验证，不能加入顺序自检。
+### 3.2 内核堆测试（`heap`）
 
-## 物理内存地图检查
+- 在全局静态堆上验证 4 KiB 页对齐的 `Box`、`Vec` 动态扩容与数据完整性、超出 1 MiB 容量的 `try_reserve_exact` 错误返回，以及反复分配释放后全局堆实际占用字节数恢复至测试前基线（无内存泄漏）。
+- 在一块独立的 8 KiB 静态测试池上实例化局部 `Heap`，验证不同大小与对齐的块互不重叠、耗尽时返回 `Err`、释放后复用原地址，以及两个 4 KiB 伙伴块全部释放后能合并满足 8 KiB 分配且释放后已用字节数归零。
 
-内存地图检查分为模块自检和真实启动检查。前者验证解析及区间算法，后者验证平台参数传递、地址转换和实际内存占用。两者均通过后，才能确认启动信息已正确接入；这些检查不覆盖用户隔离或 LoongArch 通用 UEFI 启动。页框分配的检查见下节。
+### 3.3 物理内存与启动数据测试（`physical regions`、`physical frames`、`FDT memory`、`boot FDT mapping`、`boot tables`）
 
-两架构的 `ktest` 均执行 `physical regions` 和 `FDT memory` 测试组。区间测试覆盖合并、扣除、页对齐、溢出和无可用页，并穷举八个页面的保留组合。FDT 测试覆盖多 RAM 区间、一或两个 cell、禁用节点、静态保留区、initrd，以及截断、重叠和不支持的描述等错误输入。LoongArch 额外执行 `boot tables` 测试，检查 GUID 查找、initrd 描述、缺失或重复表项、截断、溢出和 DMW 地址转换。
+- **`physical regions`**：测试物理区间的排序、重叠/相邻合并、保留区扣除、向内页对齐、空可用区（`usable` 为空切片）以及对 8 个页面的 $2^8 = 256$ 种保留组合进行穷举验证。
+- **`physical frames`**：
+  - 借用启动时创建的真实 `FrameAllocator` 试分配一页，校验页框地址 4 KiB 对齐且落在可用区间内，离开作用域后空闲页数恢复。
+  - 在合成区间上验证跨空洞分配、耗尽返回 `None`、释放后复用、位图字边界（`1`、`WORD_BITS - 1`、`WORD_BITS`、`WORD_BITS + 1` 等）以及 8 页 256 种保留掩码组合。
+  - 在 128 字与 8192 字的合成位图上进行 5000 轮稀疏回收与重分配压测，确认 `nonempty` 索引栈不产生重复项、不重分配堆内存且容量完全恢复。
+- **`FDT memory` & `boot FDT mapping`**：使用 [`os/src/ktest/support/fdt.rs`](../../os/src/ktest/support/fdt.rs) 独立编码生成的测试设备树，验证多段 RAM、`1`/`2` cell 宽度、`status = "disabled"` 节点跳过、`initrd` 保留、FDT 本体物理区间保留，对截断、块重叠、非法魔数/版本、动态保留区、超深嵌套（> 32 层）的错误拦截，以及对整份 DTB 逐字节按位取反（`^= 0xff`）时解析器绝不 panic。
+- **`boot tables`（仅 LoongArch）**：在合成的字节数组上验证 EFI 系统表签名、乱序 GUID 查找（FDT 与 initrd）、重复/缺失表项报错、地址越界拦截以及 `DMW0` 映射地址转换。
 
-`FDT memory` 只测试安全的切片解析；它与 `boot FDT mapping` 测试组直接使用 `ktest/support/fdt.rs` 中独立编码的共享样本构造器，不以解析器作为预期值来源。后者验证原始存储读取：读取完整且不变的局部数组、记录 FDT 本体的物理占用、接受恰好足够的容量、拒绝不足头部或完整载荷的容量、拒绝物理地址未对齐或溢出。另用头部有效但结构 token 损坏的载荷，确认存储读取成功后由安全解析接口返回错误。合成物理地址不用于解引用或实际页框分配；这些测试不能证明固件提供的真实地址可读。
+---
 
-在开发容器内运行以下命令，检查实际 RAM 区间是否随配置变化：
+## 4. 手动检查与故障注入验证
 
-| 命令 | 预期 `RAM` 区间 |
+以下场景涉及观察不同内存配置下的启动日志或故意触发内核致命 panic，需在独立 QEMU 实例中手动执行（不纳入顺序运行的 `just test`）。
+
+### 4.1 核对不同内存配置与 initrd 的物理区间日志
+
+在**开发容器内**执行以下命令，核对启动日志中的 `RAM`、`reserved` 与 `usable` 区间：
+
+| 命令 | 预期日志中的 `RAM` 区间 |
 | --- | --- |
 | `MEM=128M just run rv` | `[0x80000000, 0x88000000)` |
 | `MEM=1G just run rv` | `[0x80000000, 0xc0000000)` |
-| `MEM=768M just run la` | `[0, 0x10000000)`、`[0x80000000, 0xa0000000)` |
-| `MEM=1G just run la` | `[0, 0x10000000)`、`[0x80000000, 0xb0000000)` |
+| `MEM=768M just run la` | `[0x0, 0x10000000)`、`[0x80000000, 0xa0000000)` |
+| `MEM=1G just run la` | `[0x0, 0x10000000)`、`[0x80000000, 0xb0000000)` |
 
-`usable` 必须位于 RAM 内、按页对齐，且不与 `reserved` 重叠。保留区必须覆盖整个内核和 FDT；LoongArch 还必须保留前 1 MiB 启动块。FDT 和内核结束地址随启动环境及构建产物变化，应检查覆盖关系，而非固定这些边界。LoongArch 的内核加载地址为 `0x90000000`，128 MiB 等小内存配置无法容纳内核，因此回归使用 768 MiB 及以上配置。
+验证携带 `initrd` 时，其物理范围会被自动加入 `reserved`：
 
-带 initrd 的检查使用文档文件作为字节载荷，只验证其整个物理区间被保留，不解析文件内容：
-
-```sh
+```bash
 MEM=128M just run rv -initrd docs/architecture/boot.md
 MEM=3G just run la -initrd docs/architecture/boot.md
 ```
 
-LoongArch 使用 3 GiB 是为了满足 QEMU 10.0.2 的加载器检查：该加载器将 initrd 的物理末端与 `-m` 字节数比较，而不是与高端 RAM 的末端比较。这个配置要求来自加载器，不是内核堆或 initrd 本身需要 3 GiB。
+> **说明：** LoongArch 传入 `-initrd` 时指定 `MEM=3G` 是因为 QEMU 10.0.2 的加载器在校验 initrd 放置地址时，会将高地址 RAM 中的 initrd 物理末端直接与 `-m` 指定的总内存字节数比较。
 
-启动表或设备树解析失败时，内核必须 panic 停机，不得输出正常启动或自检总成功标记。
+### 4.2 注入非法的设备树保留区（验证启动失败停机）
 
-### 注入不支持的启动内存描述
+在**宿主机**仓库根目录执行以下命令（需宿主机已安装 `device-tree-compiler` 提供的 `fdtput` 工具）：先从 QEMU 导出一份正常的 DTB，注入一个不受支持的动态 `/reserved-memory` 节点，再传入内核启动：
 
-故障注入必须在独立 QEMU 实例中执行，不加入顺序自检。下面在 Linux 宿主机的仓库根目录运行，要求已有开发镜像和 `device-tree-compiler` 提供的 `fdtput`。先导出一份 128 MiB 配置的设备树副本，再加入没有静态地址的动态保留区；原始设备树和内核源码均不修改。
-
-```sh
+```bash
 mkdir -p artifacts/memory-negative
 just container qemu-system-riscv64 -machine virt,dumpdtb=artifacts/memory-negative/base.dtb -m 128M -smp 1 -nographic
 cp artifacts/memory-negative/base.dtb artifacts/memory-negative/dynamic.dtb
@@ -112,46 +112,4 @@ just container just build rv release ktest
 just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kernel kernel-rv -m 128M -smp 1 -nographic -no-reboot -dtb artifacts/memory-negative/dynamic.dtb
 ```
 
-最后一个命令应输出包含 `memory initialization failed` 和 `dynamic reserved-memory allocation is unsupported` 的 panic，随后停放 CPU。日志不得出现 `booted on riscv64` 或 `riscv64: all kernel tests passed`。`timeout` 返回 124 是停放后的预期结果，但必须同时核对上述输出，不能单凭超时判定通过。测试副本保留在被忽略的 `artifacts/memory-negative/`，后续普通启动不传入 `-dtb` 即不受注入影响。
-
-## 页框分配检查
-
-页框分配器以位图管理 `MemoryMap::usable()` 返回的区间，每页固定 4 KiB；元数据来自现有静态堆，每 GiB 可用 RAM 约需 32 KiB 位图和 32 KiB 非空字索引，合计约 64 KiB，另有区间元数据。初始化预留全部索引槽，堆无法容纳位图或索引时返回错误，启动流程 panic 停机。索引栈使位图字的选择及分配、回收更新为常数时间；这些操作本身不申请堆内存。
-
-分配器由启动流程持有，不是全局分配器；使用者通过借用分配器取得独占句柄，句柄销毁时自动回收页框。只支持关闭中断的启动 CPU，不支持连续多页分配，也不建立映射或清零页面。使用物理地址建立映射或裸指针访问时，必须在句柄销毁前结束访问并移除映射。
-
-两架构的 `just test` 均执行 `physical frames` 测试组，使用不解引用的合成物理地址验证地址零、不连续 RAM 和保留区跳过、分配唯一性、耗尽返回 `None`、释放复用、作用域回收、位图字边界及尾部无效位、多轮耗尽和回收，以及八页的全部保留组合（含没有可用页的情况）。全部 RAM 被保留或不足一页时，分配器应成功初始化，总页数和空闲页数均为零，多次分配均返回 `None`。额外验证可用区间未按 4 KiB 对齐时分配器拒绝初始化，以及超大位图无法从堆分配时返回错误。测试不耗尽真实页框池。
-
-地址集合检查不依赖分配顺序。索引回归使用 128 和 8,192 个字的独立合成位图：耗尽后只在第 0、1 个字回收三页，重复 5,000 轮，检查候选索引恰好两个、同字回收不重复入栈、重新分配得到相同页集合，以及位图和索引容量均不变；最后归还全部页并检查容量恢复。该检查不使用依赖执行环境的耗时阈值。
-
-地图输入校验由 `physical regions` 测试组覆盖：空或逆序的单个区间、缺失 RAM 描述被拒绝，重叠或相邻区间会排序并合并；扣除保留区并对齐后没有完整可用页时，返回有效地图且 `usable` 为空，包括最高地址附近对齐溢出的情况。`MemoryMap` 隐藏内部区间，只提供只读访问和可用区间的所有权移交；页框分配器依赖其已建立的单个区间非空、排序及不重叠不变量，不要求可用区间列表非空。
-
-`physical frames` 测试组还借用正常启动创建的分配器，尝试分配一个真实页框。有空闲页时检查页数递减、物理地址页对齐且位于可用区间，并在句柄离开作用域后检查空闲页数恢复；没有空闲页时检查分配返回 `None`。这项检查仅在启用 `ktest` 时执行，不会读写页面内容，不能证明物理页映射或清零行为。全部自检通过后仍以统一入口的总成功标记为准。
-
-## Syscall ABI 内核测试
-
-同一组 `just test` 命令也验证 Linux syscall ABI。测试位于 `os/src/ktest/syscall/`，由统一入口在受控用户执行环境中调用：RISC-V 使用 bare 模式，依赖固件 PMP 允许访问探针与栈；LoongArch 使用临时 PLV3 低地址 DMW1 别名，正常离开环境时恢复原值并同步翻译状态。两者均不提供用户隔离，也不注册依赖另一套件遗留状态的独立套件。
-
-- 固定用户探针连续执行三次 syscall，检查调用号和全部六个参数，包含高 32 位非零、最高位为一及负数的原始机器字。
-- 正常返回仅修改 a0 和 PC，保留其余整数寄存器及异常元数据；用户将超过 32 位的成功值和负 errno 复制到下一次调用参数，验证实际可见结果和四字节 PC 推进，最后到达指定 breakpoint。
-- 非 syscall 的 breakpoint、内核 syscall，以及 LoongArch 带残留 syscall Ecode 的 refill 均被拒绝，且现场不变。内核 syscall 和残留 Ecode 场景使用构造的现场检查，不实际触发致命内核异常。
-- 在已捕获的用户 syscall 现场上构造 PC 边界：可表示的四字节推进成功，溢出时拒绝完成并保持 PC、整数寄存器及异常信息不变；不实际执行边界地址。
-
-成功时额外输出 `<架构>: syscall ABI tests passed`，全部套件完成仍以总成功标记为准。
-
-## 任务执行内核测试
-
-同一组 `just test` 命令也通过 `os/src/ktest/task/` 中的真实用户探针验证 `Task::run`。统一入口在 syscall ABI 测试后调用任务测试，复用可信映射和独占用户栈；LoongArch 在恢复 DMW1 前完成全部任务执行，默认启动不建立用户映射。
-
-- 连续未知 syscall 在用户态观察到 `-ENOSYS` 并继续执行；包含高 32 位非零、低 32 位为 `exit` 的调用号，防止错误截断调用号。
-- `exit` 与 `exit_group` 只保存参数低八位，保留退出处 PC 和 a0，不执行退出后的指令。
-- 结束任务重复运行返回原结果，且完整现场不变。
-- 独立 breakpoint 即使携带类似 `exit` 的寄存器值，也必须作为故障终止；保留故障 PC、整数寄存器及异常信息。随后新建正常任务仍能执行并退出，原故障现场不变。
-
-成功时输出 `<架构>: task kernel tests passed`，仍须检查统一入口的总成功标记。测试不覆盖 ELF 加载、用户内存隔离、多任务调度或抢占；正常启动尚无用户程序，不创建任务。
-
-任务对 syscall 完成失败的处理可用独立 debug QEMU 实例验证：在 `Task::run` 调用 `syscall::complete` 前暂停，将已捕获 syscall 现场的 PC 改为 `usize::MAX - 3`，再运行到保存终止状态处，检查任务成为 `Finished(Faulted)`，且注入后的完整现场保持不变。不恢复执行该边界地址；这项故障注入不属于上述顺序自检。
-
-## 静态检查
-
-容器内运行 `just check`，依次检查格式并对 RISC-V 和 LoongArch 的默认配置、`ktest` 配置分别运行 Clippy。四种配置均使用锁定依赖和离线模式，并将警告视为错误；`just lint` 单独运行同一 Clippy 矩阵。检查会准备 vendor 校验链接，但不会安装工具链、下载依赖、启动 QEMU 或导出比赛 ELF，也不能替代链接和运行时验证。
+预期串口应打印 `memory initialization failed` 与 `dynamic reserved-memory allocation is unsupported` 的 panic 信息并停机，不得出现 `booted on riscv64` 或 `all kernel tests passed`。

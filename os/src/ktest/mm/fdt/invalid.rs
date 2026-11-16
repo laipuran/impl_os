@@ -1,4 +1,4 @@
-//! 不支持的内存描述、损坏的数据块及解析深度限制。
+//! 非法与损坏设备树测试：验证不支持的保留区格式、截断/重叠数据块及超深节点树的错误拦截。
 
 use super::super::parse;
 use crate::ktest::support::fdt::{basic, Builder};
@@ -46,15 +46,15 @@ fn malformed_blobs_fail() {
         );
     }
     for (offset, value) in [
-        (0, 0),         // magic
-        (4, 39),        // total size
-        (8, 40),        // structure overlaps reservation map
-        (12, u32::MAX), // strings outside blob
-        (16, 41),       // reservation map alignment
-        (20, 16),       // unsupported version
-        (24, 18),       // incompatible layout
-        (32, u32::MAX), // strings length
-        (36, u32::MAX), // structure length
+        (0, 0),         // 非法魔数
+        (4, 39),        // totalsize 小于 40 字节头部
+        (8, 40),        // 结构块与内存保留表重叠
+        (12, u32::MAX), // 字符串块偏移越界
+        (16, 41),       // 内存保留表未按 8 字节对齐
+        (20, 16),       // 版本号低于 v17
+        (24, 18),       // last_comp_version 高于 v17
+        (32, u32::MAX), // 字符串块长度越界
+        (36, u32::MAX), // 结构块长度越界
     ] {
         let mut damaged = blob.clone();
         damaged[offset..offset + 4].copy_from_slice(&value.to_be_bytes());

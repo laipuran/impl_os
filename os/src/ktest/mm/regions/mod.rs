@@ -1,4 +1,4 @@
-//! 与裸机自检共享的纯区间测试。
+//! 物理内存区间（[`Region`] 与 [`MemoryMap`]）归并、扣除与页对齐单元测试。
 
 use alloc::vec;
 
@@ -87,7 +87,7 @@ fn exhaustive_reservations() {
     }
 }
 
-/// 验证区间合并、扣除、对齐、空可用区及非法布局的错误路径。
+/// 验证物理区间的排序合并、保留区扣除、向内页对齐、空可用区以及非法参数的错误拦截。
 pub fn kernel_test() {
     merge_and_subtract();
     alignment_and_errors();

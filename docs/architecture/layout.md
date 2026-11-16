@@ -1,28 +1,48 @@
-# 内核模块与执行关系
+# 代码结构与模块职责
 
-## 构建与入口
+## 构建与启动入口
 
-`just` 将内核构建交给 Make，Make 调用 workspace 中的 `os` crate；`os/build.rs` 按目标选择链接脚本，Rust 按目标选择架构实现。比赛构建入口为 `make all`。开发命令和目标见[任务分工](../development/targets.md)。
+- **构建链路**：日常开发使用的 `just build` 会调用根目录 `Makefile`（比赛评测入口为 `make all`）。`Makefile` 针对两个裸机 target 分别调用 Cargo 编译 `os` crate，并由 [`os/build.rs`](../../os/build.rs) 根据目标架构注入对应的链接脚本（`linker.ld`）。
+- **启动链路**：各架构的 `entry.S` 仅放行主核（hart 0 / core 0），将其余从核挂起；在设置好 64 KiB 启动栈后，将固件或 QEMU 传入的启动参数放入第一个参数寄存器，跳转至共享的 Rust 入口 `kernel_main(boot_arg)`。
+- **运行模型**：当前内核运行在单核、关中断环境下。`kernel_main` 依次完成 BSS 清零、日志初始化、Trap 向量安装与内存管理初始化；若启用了 `ktest` feature 则运行内核自检，最后调用 `arch::shutdown()`（panic 路径则打印诊断信息并调用 `arch::halt()` 停机，绝不伪造正常关机）。
 
-两架构的入口汇编设置启动 CPU 和栈，将平台启动参数传给 `kernel_main`。共享入口清零 BSS，初始化日志、trap 和内存管理，按配置运行自检后调用架构关机入口；LoongArch 当前仅停放 CPU。panic 输出诊断后停机，不报告成功关机。非启动 CPU 被停放，当前代码假设单 CPU、关闭中断；控制台不提供并发保护。
+## 核心模块划分
 
-## 模块边界
+| 模块 | 路径 | 职责说明 |
+| --- | --- | --- |
+| `arch` | `os/src/arch/` | 按编译目标导出统一的平台接口：早期串口输出、关机/停机、启动参数与内存发现（`boot`）、Trap 上下文与用户态切换（`trap`）、Linux 系统调用寄存器约定（`syscall`）。详见 [`os/src/arch/README.md`](../../os/src/arch/README.md)。 |
+| `mm` | `os/src/mm/` | 内存管理：初始化 1 MiB 静态伙伴系统堆（`heap`），解析设备树内存信息（`fdt`），对 RAM 与保留区排序、合并、扣除并按页对齐（`regions`），最终构建基于位图的 4 KiB 物理页框分配器（`frame`）。 |
+| `trap` | `os/src/trap.rs` | 共享的内核态异常处理入口 `handle_kernel`。用户态 Trap 直接从 `arch::trap::run_user` 返回给调用者；内核态未预期 Trap 则在此打印现场并 panic。 |
+| `syscall` | `os/src/syscall.rs` | Linux 系统调用解码、分发与返回写回。目前已接入 `exit`（93）和 `exit_group`（94），其余调用号返回 `-ENOSYS`（-38）。 |
+| `task` | `os/src/task.rs` | 最小用户任务封装 `Task`。持有一个 `TrapContext`，在当前内核栈上同步循环调用 `run_user` 执行用户态代码，直至任务调用 `exit` 或触发未处理异常。 |
+| `ktest` | `os/src/ktest/` | 启动期内核白盒自检框架（仅在启用 `ktest` feature 时参与编译），详见 [内核自检与测试验证](../testing/README.md)。 |
 
-- `arch` 按编译目标显式提供启动、串口、停机、trap 和 syscall ABI 接口。平台代码负责启动协议、原始地址访问和地址转换；各架构保留独立的寄存器现场与汇编约定。详见[架构与平台边界](../../os/src/arch/README.md)。
-- `mm` 负责初始化堆和物理内存。平台读取已映射启动存储并记录其占用；`mm::fdt` 只安全解析字节切片，不能保证原始地址可读。格式无关的 `BootMemory` 保存未归一化的 RAM 和保留区，`mm::regions` 建立内存地图不变量，`mm::frame` 管理可用页框及其独占句柄。
-- `trap` 处理共享异常策略；架构代码保存和恢复整数现场。`syscall` 解码 Linux 调用 ABI，`task` 同步执行用户现场直至退出或故障，不提供调度或地址空间管理。
-- `ktest` 是启动期自检的统一入口，按静态列表执行测试组；默认构建不包含自检。测试使用可信用户探针，并不提供用户隔离。测试组织、运行及机器状态约束见[开发检查](../testing/README.md)。
-
-## 关键执行关系
+## 核心调用流
 
 ```text
-_start → kernel_main → clear_bss → 日志和 trap 初始化
-                    → mm::init → heap::init
-                               → arch::boot::memory → MappedFdt → fdt::parse
-                               → discover → regions::MemoryMap → FrameAllocator
-                    → ktest::run（仅 ktest）→ arch::shutdown
-task → arch::trap::run_user → 用户陷阱返回 → syscall 解码与分发
-panic → console → arch::halt
+_start (entry.S)
+  └─> kernel_main(boot_arg)
+        ├─> clear_bss()
+        ├─> utils::logging::init()
+        ├─> trap::init()
+        ├─> mm::init(boot_arg)
+        │     ├─> heap::init()
+        │     ├─> arch::boot::memory(boot_arg)
+        │     │     └─> MappedFdt::from_raw() -> fdt::parse()
+        │     ├─> discover() -> regions::MemoryMap::new()
+        │     └─> frame::FrameAllocator::new()
+        ├─> ktest::run(&frames)          [仅 feature = "ktest"]
+        └─> arch::shutdown()
+
+Task::run()
+  └─> loop {
+        arch::trap::run_user(&mut ctx)   [降权进入 U-mode / PLV3，触发 Trap 后返回]
+        syscall::decode(&ctx)
+        syscall::dispatch(call)
+        syscall::complete(&mut ctx, ret) [写回返回值并令 PC + 4]
+      }
+
+panic -> console::println! -> arch::halt()
 ```
 
-平台必须保证启动数据完整、可读且在解析期间不变；内存地图负责排序、合并、扣除和页对齐，分配器依赖其结果。详细启动顺序、内存保留、异常和架构限制见[启动流程](boot.md)。
+各子系统的设计细节与当前边界见 [启动流程、内存管理与异常处理](boot.md)。

@@ -1,42 +1,43 @@
-//! 单核、关闭中断的用户任务执行循环。
+//! 单核关中断环境下的最小用户任务执行循环。
 //!
-//! 任务独占整数现场，不分配内核栈，也不拥有或切换地址空间。调用者先准备
-//! 用户代码、栈和当前映射，再执行到退出或未处理的用户陷阱；不提供抢占或阻塞。
+//! [`Task`] 仅封装一个用户态整数上下文（[`TrapContext`]）及其运行状态机，
+//! 暂不持有独立的内核栈或用户地址空间。调用方需先准备好用户代码与栈映射，
+//! 再调用 [`Task::run`] 同步执行用户程序，直到任务调用 `exit` 或触发未处理异常。
 
 use crate::arch::trap::{run_user, TrapContext};
 use crate::syscall::{self, Outcome};
 
-/// 任务不可再次进入用户态的终止结果。
+/// 用户任务的最终终止原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitStatus {
-    /// 正常退出；保留 Linux 可观察的低八位退出码。
+    /// 通过 `exit` 或 `exit_group` 正常退出，保存低 8 位退出码。
     Exited(u8),
-    /// 未处理的用户陷阱或 syscall 无法完成；诊断信息保留在任务现场中。
+    /// 触发了未处理的用户态异常，或系统调用返回时 PC 推进溢出。
     Faulted,
 }
 
-/// 同步执行期间的任务生命周期。
+/// 用户任务的生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
-    /// 已拥有初始现场，尚未执行。
+    /// 已完成初始化，尚未进入用户态执行。
     Ready,
-    /// 正在用户态执行或在内核中处理该任务的 syscall。
+    /// 正在用户态运行，或正在内核中处理其系统调用。
     Running,
-    /// 已终止，不能恢复执行。
+    /// 已终止，不可再次进入用户态。
     Finished(ExitStatus),
 }
 
-/// 拥有一个用户整数现场及其生命周期的最小任务。
+/// 持有单个用户态整数上下文的最小任务控制结构。
 ///
-/// 不持有用户内存；调用者须保证执行期间代码、栈及所需数据的生命周期。
+/// `Task` 本身不管理虚拟内存生命周期；调用方必须保证任务运行期间其代码、栈与数据映射持续有效。
 pub struct Task {
     context: TrapContext,
     state: TaskState,
 }
 
-#[allow(dead_code)] // ELF 装载器接入前，由 ktest 提供已准备好的用户程序。
+#[allow(dead_code)] // 在 ELF 加载器接入前，暂由 ktest 直接构造并运行用户任务。
 impl Task {
-    /// 接收初始用户现场，创建尚未执行的任务；不检查地址或激活映射。
+    /// 使用给定的初始用户态上下文创建处于 [`TaskState::Ready`] 状态的任务。
     pub fn new(context: TrapContext) -> Self {
         Self {
             context,
@@ -44,44 +45,43 @@ impl Task {
         }
     }
 
-    /// 返回当前生命周期状态。
+    /// 返回任务的当前生命周期状态。
     pub fn state(&self) -> TaskState {
         self.state
     }
 
-    /// 借用初始现场或最后一次用户陷阱现场，包括退出和故障处的 PC。
+    /// 返回任务当前的寄存器与异常上下文引用（含退出或故障时刻的现场）。
     pub fn context(&self) -> &TrapContext {
         &self.context
     }
 
-    /// 同步执行到退出、未处理的用户陷阱或 syscall 无法完成，并保存终止结果。
+    /// 同步运行用户任务，直到其主动退出或因异常终止。
     ///
-    /// 正常返回的 syscall 写回结果并推进 PC，然后重新进入用户态；退出和
-    /// 故障不修改最后的现场。PC 推进溢出时按故障终止，不恢复该现场。
-    /// 已结束任务直接返回原结果，不再次执行用户代码。
-    /// 不保证执行时间有界：用户必须主动退出或触发可终止的陷阱。
+    /// 循环进入用户态并拦截 Trap：
+    /// - 若为普通系统调用，写回返回值并将 PC 加 4 后继续进入用户态；
+    /// - 若为 `exit` / `exit_group` 或触发非系统调用异常，则保留当前现场并将状态置为 [`TaskState::Finished`]。
+    ///
+    /// 对已经处于 [`TaskState::Finished`] 状态的任务再次调用本方法会直接返回原退出结果，不会重复进入用户态。
     ///
     /// # Safety
-    /// 本核须已初始化 trap，保持单 CPU、关闭中断且没有嵌套用户切换。
-    /// 整个调用期间须保持该任务的用户映射有效且处于激活状态，并满足
-    /// [`run_user`] 对代码、栈、数据及 ABI 对齐的安全要求。正常 syscall
-    /// 返回后的继续执行也须满足这些要求。本接口不提供内存隔离；当前裸地址
-    /// 环境只能执行不会覆盖内核或其他任务内存的可信用户代码。
+    ///
+    /// - 调用时当前 CPU 必须已完成 [`crate::trap::init`] 初始化，保持单核、关中断且无嵌套的 `run_user` 调用。
+    /// - 调用期间必须保持该任务对应的用户代码、栈及数据映射有效且处于激活状态，并满足 [`run_user`] 的对齐与内存隔离要求。
+    /// - 在接入用户页表隔离前，仅可用于执行受信任的测试代码，不得运行可能篡改内核内存的不可信程序。
     pub unsafe fn run(&mut self) -> ExitStatus {
         if let TaskState::Finished(status) = self.state {
             return status;
         }
         self.state = TaskState::Running;
         let status = loop {
-            // SAFETY: 调用者保证整个执行期间的用户映射、私有栈和代码有效，
-            // 并独占已初始化且关闭中断的本核；现场由此任务独占。
+            // SAFETY: 调用者保证单核关中断环境及用户代码、栈映射有效，且 `self.context` 由当前任务独占。
             unsafe { run_user(&mut self.context) };
             let Some(call) = syscall::decode(&self.context) else {
                 break ExitStatus::Faulted;
             };
             match syscall::dispatch(call) {
                 Outcome::Return(result) => {
-                    // 每次陷阱仅完成一次；PC 无法推进时保留现场并终止任务。
+                    // 若 PC + 4 溢出则保留原现场并按故障终止任务，不再恢复执行。
                     if !syscall::complete(&mut self.context, result) {
                         break ExitStatus::Faulted;
                     }

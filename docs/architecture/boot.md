@@ -1,109 +1,91 @@
-# 启动流程与当前限制
+# 启动流程、内存管理与异常处理
 
-## 启动与初始化顺序
+## 1. 启动与初始化顺序
 
-1. QEMU 加载 ELF，进入 `_start`。
-2. 架构汇编停放非启动 CPU，设置启动栈，并按 C ABI 将平台启动参数传给 `kernel_main(boot_arg)`。
-3. Rust 用 volatile stores 清零 `sbss..ebss`，避免依赖尚未提供的 memset。
-4. 内核依次初始化日志、trap 和内核堆，再解析启动信息、建立物理内存地图，并将可用区间交给页框分配器。
-5. 内存初始化输出页框总数和空闲页数，随后内核输出架构名称；启用 `ktest` 时，`ktest::run` 借用已初始化的分配器，按测试组列表顺序执行自检，包括异常、降权往返、Linux syscall ABI、任务执行循环及内存管理检查。
-6. 内核调用架构关机入口。未预期的内核异常则输出保存的异常状态并 panic 停机。
+1. **固件/模拟器加载**：QEMU 加载内核 ELF 并跳转到汇编入口 `_start`。
+2. **汇编早期准备（`entry.S`）**：拦截非主核并使其进入休眠循环（`wfi` / `idle 0`）；主核设置 64 KiB 启动栈（`.bss.stack`），将固件传入的启动数据地址整理到第一个参数寄存器（`a0` / `$a0`），跳转到 `kernel_main(boot_arg)`。
+3. **清零 BSS（`clear_bss`）**：使用 `write_volatile` 逐字节清零 `sbss..ebss`，避免编译器将其优化为尚不可用的外部 `memset` 调用。注意链接脚本将 `.bss.stack` 放在 `sbss` 之前，防止清零 BSS 时冲掉正在使用的启动栈。
+4. **基础子系统初始化**：依次初始化日志（`utils::logging::init`）、异常入口（`trap::init`）以及内存管理（`mm::init`）。
+5. **自检与停机**：打印物理页框统计与当前架构名称；若编译时开启了 `ktest` feature，则调用 `ktest::run(&frames)` 顺序执行内核自检，最后调用 `arch::shutdown()`。
 
-链接脚本把 `.bss.stack` 放在 `sbss` 之前，不能在 Rust 已经使用启动栈后将它清零。启动栈固定 64 KiB。
+---
 
-### 内核堆
+## 2. 内存管理（`mm`）
 
-`mm::init(boot_arg)` 首先将 BSS 中按 4 KiB 对齐的 1 MiB 静态空间交给 `buddy_system_allocator` 管理，再发现物理内存并创建页框分配器。该堆空间属于内核镜像，双架构均通过当前内核地址直接访问，不依赖页框分配器或用户页表。初始化只能执行一次，且必须早于首次堆分配；重复初始化会 panic，即使上一次初始化在堆建立后返回了错误也不能重试。
+### 2.1 静态内核堆（`mm::heap`）
 
-内核通过 `alloc` 中的 `Box`、`Vec` 等类型申请内存，由全局 `LockedHeap` 按大小和对齐拆分伙伴块，对象释放时回收并合并。二次幂取整和地址对齐会限制可满足的单次申请，1 MiB 总容量不保证能申请一个连续的 1 MiB 块；目前不支持自动扩容。普通分配失败通过不依赖堆的 panic 输出停机；需要处理耗尽的调用者可以使用 `Vec::try_reserve` 等可失败接口。
+`mm::init(boot_arg)` 首先将位于 BSS 段、按 4 KiB 对齐的 1 MiB 静态数组交给 `buddy_system_allocator::LockedHeap` 管理，随后才开始解析设备树和初始化页框分配器：
 
-分配器的自旋锁只保护内部状态，不会关闭中断。目前仅允许关闭中断的启动 CPU 分配；启用中断或多核分配之前必须重新检查同步和重入约束。此堆不负责用户堆、设备内存或页框分配。
+- **无页表依赖**：静态堆直接位于内核镜像的 BSS 段内，双架构均可直接通过内核地址访问，无需依赖物理页框分配器或动态页表。
+- **使用约束**：必须在首次堆分配前且在单核关中断状态下调用一次（重复调用会直接 panic）。伙伴分配器按 2 的幂次拆分与对齐内存块，因此 1 MiB 总容量并不意味着单次可申请完整的 1 MiB 块。常规分配失败会触发 `#[alloc_error_handler]` 并通过不依赖堆的串口输出 panic 停机；需要容错的场景（如页框位图初始化）使用 `Vec::try_reserve_exact` 等可失败接口。
 
-## 从启动信息建立物理内存地图
+### 2.2 物理内存发现与区间整理（`mm::fdt` & `mm::regions`）
 
-两架构均从启动信息读取实际 RAM 区间，扣除保留区后生成可用物理页区间，再由页框分配器管理这些区间。目前支持单个 4 KiB 页框的分配与自动回收，尚未实现连续多页分配、堆扩容或用户映射。
+静态堆就绪后，`mm::init` 调用 `arch::boot::memory(boot_arg)` 提取平台原始的 RAM 与保留区间（`BootMemory`），再加上 `arch::boot::kernel_region()` 报告的内核镜像物理区间（`skernel..ekernel`），交由 `mm::regions::MemoryMap::new` 统一整理：
 
-`mm::init(boot_arg)` 在静态堆初始化后调用 `arch::boot::memory`，再由私有的安全函数 `discover` 整理返回的 `mm::boot_memory::BootMemory`、建立地图，并交给 `FrameAllocator::new`。该格式无关描述保存尚未归一化的 RAM 和保留区；平台模块解释启动参数，提供设备树（FDT）的访问方式和平台保留区，共享的 `mm::fdt` 与 `mm::regions` 分别负责解析和区间运算。入口汇编将平台参数放入第一个参数寄存器，因此 `kernel_main` 只需显式传递 `boot_arg`，无需解释平台寄存器、地址转换或安排内存初始化的内部顺序。
+- **裸指针与切片解析分离**：
+  - 架构层的 `arch::boot_data::MappedFdt::from_raw` 集中负责 `unsafe` 的裸地址校验：先验证 8 字节对齐与非空，读取 40 字节 FDT 头部获取总长度，确认不超过平台容量上限后再构造 `&[u8]` 切片，并记录 FDT 自身的物理区间。
+  - `mm::fdt::parse(&[u8])` 是纯安全的字节切片解析器，依据 [Devicetree Specification v0.4 第 5 章](https://github.com/devicetree-org/devicetree-specification/blob/v0.4/source/chapter5-flattened-format.rst) 解析 DTB v17（及向后兼容版本）。它会校验头部、块边界与重叠关系，提取所有启用的根级 `memory` 节点（`reg`）、内存保留表（reservation map）、`/reserved-memory` 下的静态保留区以及 `/chosen` 中的 `initrd` 范围。
+  - 若遇到动态保留区（仅指定 `size` 无 `reg`）、嵌套保留区、非空 `ranges`、不支持的 `#address-cells`/`#size-cells`（仅支持 1 或 2）或节点深度超过 32 层，解析器会直接报错并由内核 panic 停机，防止误将用途不明的物理内存当成空闲页分配。
+- **物理区间归一化（`MemoryMap`）**：
+  - 分别对 RAM 区间和保留区间排序并合并重叠/相邻区间，随后从 RAM 中挖去所有保留区，并将剩余片段向内按 4 KiB 页边界对齐，生成 `usable` 可用页区间。
+  - 若设备树未描述任何 RAM，或内核镜像（`skernel..ekernel`）未完整落在 RAM 区间内，内核直接拒绝启动。若扣除保留区并按页对齐后没有任何完整的可用页，`MemoryMap` 依然合法（`usable` 为空），此时页框分配器总容量为 0，后续 `alloc()` 返回 `None`。
+  - 启动日志会依次打印归一化后的 `RAM`、`reserved` 和 `usable` 半开物理区间 `[start, end)`。
 
-平台必须保证启动数据完整、可读，且在内存发现期间不变。解析器可以校验 FDT 的结构，但不能证明物理地址可读；这一前提由启动协议保证。内核会保留 FDT 的物理存储区间，包括位于 RAM 之外的 FDT。
+### 2.3 物理页框分配器（`mm::frame`）
 
-裸地址读取集中在 `arch::boot_data::MappedFdt::from_raw`：先读取固定头部，再检查总长度及平台容量，最后借用完整存储。构造成功后，`parse_memory` 通过安全的 `mm::fdt::parse(&[u8])` 生成内存描述，并追加 FDT 本体的保留区。FDT 模块自身不再解引用裸地址，也不暴露 unsafe 接口；格式校验与存储可读性分别由解析器和启动协议负责。`mm::init` 仍有启动环境和原始数据读取的安全前提。`FrameAllocator::new` 只建立位图和地址记录，是安全接口；实际映射或访问页框时，使用者仍须确认 RAM 有效、独占且不与其他占用冲突，并遵守句柄有效期。
+`FrameAllocator` 使用位图管理 `MemoryMap` 移交的可用物理区间，每个 4 KiB 页框占 1 bit（置 1 表示空闲），RAM 空洞不占用位图空间：
 
-FDT 解析依据 [Devicetree Specification v0.4 第 5 章](https://github.com/devicetree-org/devicetree-specification/blob/v0.4/source/chapter5-flattened-format.rst)，其中 §5.1、§5.2 和 §5.6 分别定义格式版本兼容、头部字段及对齐规则。支持 DTB 二进制格式 v17 及声明兼容 v17 的后续版本，并校验头部、数据块边界和重叠、字符串、属性长度及节点结构。解析器收集所有启用的根级 memory 节点及其多段 `reg`、内存保留表（reservation map）、`/reserved-memory` 的静态区间，以及 `/chosen` 中的 initrd。
+- **常数时间分配与回收**：除了位图数组 `free` 外，分配器还维护一个记录“非零位图字下标”的索引栈 `nonempty`。每个含有空闲页的位图字在栈中恰好出现一次：分配时直接取栈顶字并用 `trailing_zeros` 定位空闲位，当该字变为全 0 时弹出栈顶；回收时仅当某个字从全 0 变为非 0 时才将其下标压回栈中。初始化时一次性在静态堆上预留全部位图与索引槽，后续 `alloc` / `drop` 均为 $O(1)$ 操作且不再触发堆分配。
+- **RAII 生命周期管理**：`alloc()` 返回借用分配器的 `Frame<'_>` 句柄（不支持 `Copy`/`Clone`），句柄离开作用域时通过 `Drop` 自动归还页框。`Frame::start_address()` 返回的是**物理字节地址**而非可直接解引用的虚拟地址；分配器本身不负责建立页表映射或清零页面，使用方必须在 `Frame` 销毁前解除映射并停止访问对应物理页。
 
-地址和长度支持一或两个 32 位 cell；`/reserved-memory` 必须使用与根节点相同的 cell 数，且 `ranges` 必须为空。解析器会拒绝动态保留区、嵌套保留区、不支持的寻址方式和超过 32 层的设备树。启动信息无效时，内核 panic 停机，避免将用途不明的内存交给分配器。
+---
 
-`arch::boot::kernel_region` 将链接符号 `skernel..ekernel` 转成物理区间：RISC-V 使用 bare 地址，LoongArch 扣除 DMW 高地址前缀。该区间覆盖内核代码、数据、启动栈和静态堆，也包含地图自身的堆对象占用；这些空间均列入保留区。
+## 3. 双架构平台约定
 
-`mm::regions` 分别排序、合并 RAM 和保留区，再从 RAM 中扣除保留区，并将结果向内按 4 KiB 对齐。未描述 RAM，或内核不在已描述的 RAM 中时，内核拒绝启动。RAM 全部被保留或对齐后没有完整可用页时，地图仍有效，`usable` 为空；内存初始化返回零容量分配器，后续分配请求返回 `None`，由调用者处理资源不足。
+### 3.1 RISC-V 64（`arch::riscv64`）
 
-启动日志以 `RAM`、`reserved`、`usable` 输出半开物理地址区间。地图随后被消耗，可用区间移交给启动函数持有的 `FrameAllocator`；启动数据和静态堆均不回收。
+- **启动环境**：QEMU `virt` 平台 + OpenSBI，内核链接与加载基址均为 `0x80200000`。
+- **启动参数**：OpenSBI 通过 `a0` 传入 hart ID、`a1` 传入 FDT 物理地址。`entry.S` 仅放行 hart 0，将 `a1` 移入 `a0` 后调用 `kernel_main`。
+- **地址访问与关机**：当前处于 `satp = Bare` 物理直通模式，直接访问 `0x10000000` 的 NS16550A 串口与 FDT 物理地址。正常关机调用 SBI v0.2 System Reset 扩展（若固件不支持则回退到 `wfi` 死循环）。
 
-### 物理页框分配
+### 3.2 LoongArch 64（`arch::loongarch64`）
 
-`mm::frame::FrameAllocator` 使用位图管理可用区间，每个 4 KiB 页框占一位，RAM 空洞不占位图空间。每个非空位图字在索引栈中恰好出现一次：分配只访问栈顶字，字耗尽时出栈；回收仅在字从空变为非空时入栈。字的选择和更新为常数时间，不需要扫描整个池，也不承诺分配地址顺序。
+- **启动环境**：QEMU `virt` 平台直接加载 ELF（direct boot），物理加载地址为 `0x90000000`，虚拟链接基址为 `0x9000000090000000`。
+- **DMW 窗口切换**：QEMU 从物理地址进入 `_start`。`entry.S` 先配置 `DMW0`（虚拟前缀 `0x9000_0000_0000_0000`，PLV0 可缓存直映）和临时 `DMW1`（恒等映射低地址段），开启分页（`CRMD.PG = 1`）以确保开启瞬间当前 PC 仍能取指；随后跳转到 `0x9000...` 高地址空间并清除 `DMW1`。
+- **EFI 启动表解析**：QEMU direct boot 在低端 `[0, 1 MiB)` 构造了命令行与合成的 EFI 系统表，并通过 `$a2` 传入系统表物理地址（`entry.S` 将其移入 `$a0`）。`arch::boot` 通过 `DMW0` 读取系统表，校验签名后按 GUID 查找 FDT 地址与 `initrd` 范围，并将前 1 MiB 启动块、FDT 本体和 `initrd` 一并加入保留区（布局参考 [QEMU 10.0.2 `hw/loongarch/boot.c`](https://github.com/qemu/qemu/blob/v10.0.2/hw/loongarch/boot.c)）。
+- **RAM 布局要求**：QEMU `virt` 将 LoongArch RAM 分为低端 `[0, 256 MiB)`（`[0, 0x10000000)`）和 `0x80000000` 起的高端区间。由于内核加载在 `0x90000000`，QEMU 内存配置必须覆盖该地址（例如 `128M` 无法容纳内核，测试需使用 `768M` 或默认的 `1G`）。
+- **串口与关机**：串口物理地址为 `0x1fe001e0`，通过 `DMW0`（`0x9000_0000_1fe0_01e0`）访问。目前尚未实现 LoongArch 硬件关机，结束时打印提示并通过 `idle 0` 挂起 CPU。
 
-位图和索引的元数据均来自静态堆，初始化时为所有位图字预留索引槽；堆无法容纳它们时初始化返回错误，启动流程 panic 停机。分配和回收本身不申请额外堆内存。
+---
 
-`alloc()` 返回借用分配器的独占 `Frame` 句柄，耗尽时返回 `None`。句柄不能复制，销毁时自动归还页框；分配器不能先于借用它的句柄销毁。`start_address()` 返回物理字节地址，不是可直接解引用的虚拟地址。分配器不清零页面或建立映射；使用者必须在句柄销毁前结束页面访问并移除相应映射。
+## 4. Trap 与特权级切换（`arch::trap`）
 
-该分配器不是全局分配器，目前仅供关闭中断的启动 CPU 使用，不支持跨 CPU 共享或中断重入。正常启动只初始化并输出容量；真实页框的试分配和回收验证仅在 `ktest` 自检中执行，覆盖范围见[页框分配检查](../testing/README.md#页框分配检查)。
+双架构对外提供一致的 `TrapContext` 与切换函数：
 
-## RISC-V 启动约定
+- `trap::init()`：安装异常入口向量，关闭全局中断以及浮点/向量扩展（RISC-V 清零 `sstatus` 的 `SIE`/`FS`/`VS`/`XS` 与 `sie`；LoongArch 清零 `CRMD.IE`、`ECFG` 与 `EUEN`），并初始化内核使用的暂存 CSR。
+- `TrapContext::user(entry, stack)`：创建初始用户态上下文，设置入口 PC、用户栈指针及用户特权级状态位。
+- `unsafe fn run_user(context: &mut TrapContext)`：在当前内核栈上保存被调用者保存寄存器，将 `context` 中的寄存器恢复到硬件并降权进入用户态（U-mode / PLV3）。每次进入前都会强制覆写特权状态位（不信任 `context` 中原有的特权位或扩展使能位）。当用户态发生任何异常或系统调用时，汇编将完整的用户整数现场写回同一个 `context`，恢复内核寄存器并直接返回给 `run_user` 的调用方。
 
-- QEMU virt + 默认 SBI 固件，ELF 链接/入口位于 `0x80200000`。
-- 固件通过 `a0` 传入 hart ID、`a1` 传入 FDT 物理地址；入口只允许 hart 0 继续运行，再将 FDT 地址移到 `a0` 后进入 Rust。
-- 在分页关闭状态下访问 UART `0x10000000`。
-- 正常结束调用 SBI v0.2 System Reset 的 shutdown；不支持该扩展时停放 CPU。
-- panic 输出诊断后停放 CPU，不调用正常关机入口。
+| 维度 | RISC-V 64 (`riscv64`) | LoongArch 64 (`loongarch64`) |
+| --- | --- | --- |
+| **降权返回指令** | `sret`（S-mode ↔ U-mode） | `ertn`（PLV0 ↔ PLV3） |
+| **捕获的异常 CSR** | `sepc`、`sstatus`、`scause`、`stval` | `ERA`、`PRMD`、`ESTAT`、`BADV`（重填时为 `TLBR*`） |
+| **内核/用户 Trap 区分** | 内核态运行期间 `sscratch = 0`；进入用户态前将内核切换帧地址写入 `sscratch` | 检查 `PRMD.PPLV`（重填时检查 `TLBRPRMD.PPLV`）：若来自 PLV0 则在当前内核栈下推栈帧；若来自 PLV3 则先从 `SAVE2` 取出内核切换帧指针，再从该帧首槽读取 `TrapContext` 指针保存用户现场，随后从切换帧恢复内核态 |
+| **暂存 CSR 占用** | `sscratch` | `SAVE0`、`SAVE1`（入口暂存 `$t0`/`$sp`），`SAVE2`（切换帧指针），`SAVE3`（保存内核 `$tp`） |
 
-## LoongArch 启动约定
+### 内核态 Trap 与 LoongArch TLB Refill 说明
 
-LoongArch 目前支持比赛镜像中 QEMU virt 直接加载 ELF 的启动方式（direct boot）。启动信息解析针对 QEMU 合成的 EFI 系统表，不调用 EFI 服务；通用 UEFI 固件启动尚未支持。
+- **内核态同步嵌套异常**：内核态发生异常时，入口汇编在当前内核栈上分配 16 字节对齐的 `TrapContext` 并在保存完毕后调用 `trap::handle_kernel`。只要栈空间充足，保存完毕后可安全处理同步嵌套异常。正常构建下所有内核态异常均会打印异常原因、PC、原始状态/原因 CSR、故障地址及 SP 等诊断信息并 panic；仅在 `ktest` 模式下由测试钩子拦截已知的断点/重填测试探针。
+- **LoongArch TLB 重填入口（`TLBRENTRY`）**：硬件触发 TLB refill 时会关闭分页（进入直接地址翻译模式 `DA=1, PG=0`）并跳转到物理地址入口 `__loongarch_refill_entry`。汇编先通过或运算跳回 `0x9000...` 高地址窗口并重新置位 `CRMD.PG = 1`，随后复用通用保存逻辑：读取 `TLBRERA` 和 `TLBRBADV`，将 `TLBRPRMD.PWE` 归一化到 `PRMD` 第 3 位，并在保存的 `estat` 第 63 位打上软件重填标记（因为发生 refill 时硬件不会更新 `ESTAT.Ecode`）。目前内核仅捕获并报告 refill 异常，页表遍历与 TLB 填充待后续实现。
 
-ELF 虚拟起始地址为 `0x9000000090000000`，物理加载地址为 `0x90000000`。入口先建立 DMW0 高地址窗口和临时 DMW1 低地址窗口，再开启分页、跳到高地址并撤销临时窗口。这个顺序保证分页切换期间仍能取指；入口随后用 `la.local` 生成地址，设置栈并进入 Rust。
+---
 
-QEMU 通过 `$a2` 传入系统表的物理地址，入口将它移到 `$a0` 后传给 `kernel_main`。`arch::boot` 经 DMW0 读取系统表，校验签名和表项范围，再按 GUID 查找 FDT 和 initrd 描述。
+## 5. 最小用户任务与系统调用（`task` & `syscall`）
 
-QEMU 将命令行和配置表放在 `[0, 1 MiB)`，并为 FDT 提供 1 MiB 存储容量。内核保留整个启动块、FDT 和 initrd，FDT 地址从配置表取得。布局依据 [QEMU 10.0.2 boot.c](https://github.com/qemu/qemu/blob/v10.0.2/hw/loongarch/boot.c) 和 [virt.h](https://github.com/qemu/qemu/blob/v10.0.2/include/hw/loongarch/virt.h)。
-
-QEMU 将 RAM 分布在低端 `[0, 0x10000000)` 和 `0x80000000` 起的高端区间，实际区间由 FDT 描述。配置的 RAM 必须覆盖整个内核物理区间；128 MiB 等小配置无法容纳位于 `0x90000000` 的内核。运行配置及 initrd 加载限制见[物理内存地图检查](../testing/README.md#物理内存地图检查)。
-
-UART 的物理地址为 `0x1fe001e0`，内核经 DMW0 访问。关机功能尚未实现：内核输出提示后停放 CPU，因此测试结束时不会主动退出 QEMU。
-
-## Trap 与特权级切换
-
-`arch::trap` 在两个目标上提供相同的整数上下文接口：
-
-- `init()`：启动 CPU 安装异常向量，关闭中断源及浮点/向量扩展，初始化保留的 scratch CSR。
-- `TrapContext::user(entry, stack)`：构造用户态上下文。字段私有，内部保留架构寄存器及 CSR 名称；入口和栈的对齐要求见对应 Rust API。
-- `unsafe run_user(&mut context)`：保存调用者内核 ABI 状态，恢复用户整数寄存器并降权执行；用户异常直接写回该上下文，再返回原内核调用栈。可以检查异常、修改 PC/寄存器，然后再次调用。入口强制用户权限并关闭中断/扩展，不信任传入的特权状态位。
-- `registers()` / `registers_mut()`：按硬件寄存器编号读取或修改整数现场；零号寄存器在硬件恢复时仍为零。`pc()` / `set_pc()` 访问异常 PC，`sp()` 读取被打断时的栈指针。仅 PC/GPR 可通过公共接口修改，特权状态和返回路径标记由架构实现控制。
-- `cause()`：通过架构的 `trap::cause::{TrapCause, InterruptCause, ExceptionCause}` 类型描述原因，不决定恢复策略；未知编号保留。`raw_cause()`、`raw_status()`、`bad_addr()` 提供架构相关的保存值，不能将两架构的状态位视为相同语义。
-
-| 架构 | 用户态返回指令 | 普通异常状态 | 内核/用户栈区分 |
-| --- | --- | --- | --- |
-| RISC-V | `sret`，S → U | `sepc`、`sstatus`、`scause`、`stval` | 内核 `sscratch=0`；用户执行时指向可信内核切换帧 |
-| LoongArch | `ertn`，PLV0 → PLV3 | `ERA`、`PRMD`、`ESTAT`、`BADV` | 根据保存的特权级选择当前内核栈或 SAVE2 中的切换帧；保留 SAVE0..SAVE3 |
-
-所有整数寄存器在调用 Rust 前保存，用户栈不会用于执行内核处理代码。内核异常在当前栈上分配独立、16 字节对齐的帧，允许保存完成后的同步嵌套异常；处理结束恢复帧并返回内核。共享 `trap::handle_kernel` 默认对所有内核异常 panic；只有 `ktest` 构建中的 trap 自检识别并恢复其自身的探针。
-
-日志初始化早于 trap 安装，因此不能依赖 trap 诊断日志器初始化期间的异常。安装后的致命内核异常通过 panic 直接输出类型化原因、PC、原始原因/状态、故障地址及原始 SP，不受日志级别过滤；普通断点不会在正式构建中自动跳过。
-
-LoongArch 另安装物理 `TLBRENTRY`，处理 refill 时从直接地址模式回到内核 DMW。此类上下文的 `raw_cause()` 最高位为 1，其余位保留 ESTAT（其中 Ecode 不是此次 refill 的原因）；`cause()` 优先识别该标记。PC/故障地址来自 `TLBRERA`/`TLBRBADV`，`raw_status()` 将 TLBRPRMD.PWE 归一化到 PRMD bit 3，其余返回位采用 PRMD 布局，并非所有 CSR 的逐位原始转储。当前只报告 refill，不遍历页表或填充 TLB。
-
-## 最小用户任务
-
-`task::Task` 独占一个 `TrapContext`，通过 `Ready → Running → Finished(ExitStatus)` 记录生命周期。调用者先准备用户现场，再调用 `unsafe Task::run()`：循环进入用户态、接收陷阱、分发 syscall；正常返回时写回结果并推进 PC，然后重新进入用户态。任务不申请独立内核栈，始终回到原内核调用栈，不提供抢占、阻塞或任务间切换。
-
-`syscall::dispatch` 实现两架构共用的 Linux `exit`（93）和 `exit_group`（94），取首参数低八位作为退出码。当前一个任务只有一个执行线程，两者均结束当前任务；其他调用返回 `-ENOSYS`（-38）。退出不推进 PC 或写回 a0。非 syscall 用户陷阱，或 syscall 完成时 PC 加四溢出，均终止任务为 `Faulted` 并保留现场，不影响内核继续执行其他任务；内核异常仍走致命异常策略。结束后的任务再次运行只返回保存的结果，不再进入用户态；只读 `context()` 保留最后的寄存器、PC 和异常诊断信息。
-
-任务不拥有用户内存，也不激活地址空间。调用者须在整个执行期间保持映射有效且激活，满足 `run_user` 的独占、对齐及内核内存保护要求。没有时钟抢占，用户不退出就可能一直占用 CPU。正常启动尚无 ELF 装载器和用户映射，不创建任务；`ktest` 使用既有可信探针映射执行真实用户代码，这不代表可以安全运行不可信 ELF。
-
-## 当前限制
-
-- 仅支持启动 CPU、关闭中断的同步执行；没有调度或时钟/外设中断处理，syscall 仅支持上述最小分发。
-- 只保存整数状态；浮点、向量指令会异常，不提供相应上下文切换。
-- 特权级切换不等于内存隔离。尚无用户页表、进程或 ELF 加载器；调用者负责映射及保护上下文、内核栈和内核数据。
-- RISC-V 当前使用 bare 地址空间，用户访问依赖固件 PMP。LoongArch 默认 DMW0 只允许 PLV0；仅 `ktest` 中的 trap 自检临时开启 PLV3 低地址直映，并在返回统一测试入口前恢复、失效缓存翻译。该测试映射不能用于不可信程序。
-- 异常入口保存完成之前的故障、内核栈溢出和不可恢复硬件异常不提供恢复保证。
+- **`Task` 状态机**：`Task` 独占一个 `TrapContext`，状态按 `Ready -> Running -> Finished(ExitStatus)` 单向流转。调用 `unsafe Task::run(&mut self)` 后，内核在同一调用栈上循环执行 `run_user`：
+  1. 若用户触发的是系统调用，通过 `syscall::decode` 提取调用号与 6 个参数（RISC-V 为 `a7` + `a0..a5`，LoongArch 为 `$a7/$r11` + `$a0..$a5/$r4..$r9`），交由 `syscall::dispatch` 分发。
+  2. 普通返回（`Outcome::Return(val)`）时，调用 `syscall::complete` 将返回值写入 `a0` 并将异常 PC 加 4（若 `pc + 4` 发生地址溢出则判定为 `ExitStatus::Faulted`），随后继续下一轮 `run_user`。
+  3. 调用 `exit`（93）或 `exit_group`（94）时，提取首个参数的低 8 位作为退出码，任务进入 `Finished(ExitStatus::Exited(code))` 并退出循环（保持退出指令处的 PC 与 `a0` 不变）。
+  4. 若触发非系统调用异常（如断点、非法指令、缺页等），任务进入 `Finished(ExitStatus::Faulted)` 并返回，不会导致内核 panic。
+- **当前边界**：尚未实现用户页表、ELF 加载器、独立内核栈、多任务切换或时钟抢占。在页表实现前，`ktest` 在 RISC-V 上利用物理直通模式与 OpenSBI 默认 PMP 运行测试探针，在 LoongArch 上通过 `UserEnv` 临时开启 `DMW1`（PLV3 低地址映射）运行测试探针并在测试结束时撤销。

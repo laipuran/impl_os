@@ -1,4 +1,4 @@
-//! 仅由 feature 启用的真实 PLV0/PLV3 执行探针；不链接到正常启动路径。
+//! LoongArch 64 Trap、TLB 重填与特权级切换自检（仅在启用 `ktest` feature 时编译）。
 
 use super::cause::{ExceptionCause, InterruptCause, TrapCause};
 use super::{run_user, TrapContext};
@@ -7,10 +7,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 global_asm!(include_str!("probes.S"), run_user = sym abi_run_user);
 
-/// 为汇编 ABI 探针提供包裹 Rust API 的显式 C 调用边界。
+/// 为汇编 ABI 包装函数提供调用 [`run_user`] 的 `extern "C"` 垫片。
 unsafe extern "C" fn abi_run_user(context: *mut TrapContext) {
-    // SAFETY: 仅由 feature 启用的 wrapper 转发其独占 context；
-    // kernel_test 提供已映射的测试代码，并保持内核 frame 有效。
+    // SAFETY: 仅由本模块的 `probes.S` 调用，传入独占的 `context` 且用户探针与栈已映射。
     unsafe { run_user(&mut *context) };
 }
 
@@ -37,7 +36,7 @@ const UNMAPPED: usize = 0x4000_0000;
 
 fn kernel_tp() -> usize {
     let tp;
-    // SAFETY: 读取当前整数 thread pointer 不产生副作用。
+    // SAFETY: 只读获取当前 `$tp` 寄存器，无副作用。
     unsafe { asm!("move {tp}, $tp", tp = out(reg) tp, options(nomem, nostack)) };
     tp
 }
@@ -70,8 +69,7 @@ fn decode_test() {
     );
 }
 
-/// 仅识别该 feature 专用的精确 breakpoint 及内核 refill 探针。
-/// 其他异常交由共用的内核致命 trap handler 处理。
+/// 拦截并处理本测试模块专属的内核态断点与内核态 TLB 重填探针；其余异常返回 `false`。
 pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     if context.cause() == TrapCause::Exception(ExceptionCause::TlbRefill) {
         if context.pc() != __loongarch_kernel_test_refill_load as *const () as usize {
@@ -115,16 +113,14 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
     }
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
     OUTER_SP.store(context.sp(), Ordering::Relaxed);
-    // SAFETY: 上方会识别此精确 PLV0 breakpoint；它使用当前有效内核栈，
-    // 并在保存的 ERA 前移后返回。
+    // SAFETY: 触发内层同步断点，由上方的 `nested_pc` 分支拦截并将 `ERA` 前移 4 字节后返回。
     unsafe { __loongarch_kernel_test_nested() };
     assert_eq!(NESTED_COUNT.load(Ordering::Relaxed), 1);
-    // SAFETY: 此地址不存在 PLV0 低地址 DMW 或 TLB 映射。
-    // 上方会识别精确 refill 探针并跳过，不读取该地址。
+    // SAFETY: 访问未映射的低地址 `UNMAPPED` 触发内核态 TLB refill，由上方的 `TlbRefill` 分支拦截并跳过该指令。
     unsafe { __loongarch_kernel_test_refill(UNMAPPED) };
     assert_eq!(REFILL_COUNT.load(Ordering::Relaxed), 1);
     OUTER_SP.store(0, Ordering::Relaxed);
-    // 嵌套 trap 会覆盖当前异常 CSR，但不覆盖外层保存的 frame。
+    // 验证内层断点与 TLB refill 均未破坏外层保存的栈帧状态。
     assert_eq!(context.pc(), outer_pc);
     assert_eq!(context.raw_status() & 7, 0);
     assert_eq!(
@@ -132,8 +128,7 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
         TrapCause::Exception(ExceptionCause::Breakpoint)
     );
     assert_eq!(context.registers()[2], 0x602);
-    // 汇编探针在恢复调用者前检查每个修改后的 GPR。
-    // 仅保持 sp 不变，以保证被中断的内核 frame 有效。
+    // 修改除 `$sp`（`$r3`）以外的全部非零通用寄存器，交由 `probes.S` 逐一核对恢复值。
     for (register, value) in context.registers_mut().iter_mut().enumerate().skip(1) {
         if register != 3 {
             *value = 0x700 + register;
@@ -152,27 +147,22 @@ fn assert_user(context: &TrapContext, pc: usize, cause: ExceptionCause, regs: &[
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 }
 
-/// 测试异常解码、嵌套内核 break/refill 与用户态现场切换。
-///
-/// 临时低地址用户窗口映射 RAM，不提供隔离。
+/// 验证 `ESTAT` 解码、内核态嵌套断点/TLB 重填以及 PLV3 用户态切换。
 pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     decode_test();
     let mut kernel_call = TrapContext::user(0x1000, 0x2000);
     kernel_call.estat = 11 << 16;
-    kernel_call.prmd = 0; // PLV0 syscall 与用户 syscall 使用相同 Ecode。
+    kernel_call.prmd = 0; // PLV0 触发的 `syscall` 不能当成用户态系统调用处理。
     crate::syscall::tests::assert_rejected(&mut kernel_call);
     kernel_call.estat |= REFILL;
-    kernel_call.prmd = 3; // refill 标记必须优先于残留的 syscall Ecode。
+    kernel_call.prmd = 3; // 软件重填标记必须优先于残留的 `SystemCall` Ecode。
     crate::syscall::tests::assert_rejected(&mut kernel_call);
     KERNEL_TP.store(kernel_tp(), Ordering::Relaxed);
     NESTED_COUNT.store(0, Ordering::Relaxed);
     REFILL_COUNT.store(0, Ordering::Relaxed);
-    // SAFETY: 此早期启动内核测试在页表建立前仅通过 DMW0 运行；
-    // 丢弃复位时的 TLB 内容无害，
-    // 并使两个预期的 refill 探针行为确定。
+    // SAFETY: 当前内核完全通过 `DMW0` 运行；清空复位残留的 TLB 表项无副作用，且能保证后续 refill 探针行为确定。
     unsafe { asm!("invtlb 0x0, $zero, $zero", options(nostack)) };
-    // SAFETY: 汇编 wrapper 保留内核 ABI，并在恢复调用者 ABI 状态前
-    // 检查每个恢复的整数寄存器。
+    // SAFETY: 汇编探针先备份调用栈 ABI 寄存器，再触发内核态断点并核对所有恢复后的通用寄存器。
     assert_eq!(unsafe { __loongarch_kernel_test_kernel() }, 1);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
@@ -188,11 +178,9 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
         }
     }
     let first_regs = *context.registers();
-    // 注入私有状态，验证公共调用者无法保留恶意返回特权位或中断位；
-    // API 不提供 status setter。
+    // 故意填入全 1 的 `prmd`，验证 `run_user` 会强制重置特权位与中断位。
     context.prmd = usize::MAX;
-    // SAFETY: ABI wrapper 通过 C shim 调用 Rust run_user；
-    // 其受控代码仅触发 trap，无法访问暂停的内核 frame。
+    // SAFETY: 汇编 ABI 包装函数通过 `abi_run_user` 执行受控用户探针，并在返回前检查被调用者保存寄存器。
     assert_eq!(unsafe { __loongarch_kernel_test_call_abi(&mut context) }, 1);
     assert_user(&context, first, ExceptionCause::SystemCall, &first_regs);
 
@@ -202,17 +190,15 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
             *value = 0x2000 + register;
         }
     }
-    // 同时修改栈，验证 r3 被恢复而非沿用。
+    // 同时修改用户栈指针 `$r3`，确认重入时恢复的是新栈指针。
     context.registers_mut()[3] -= 16;
     let second_regs = *context.registers();
-    // SAFETY: 同一 ABI 探针使用独占、已映射 context 中修改后的 PC、
-    // GPR 和栈，再次执行真实 syscall。
+    // SAFETY: 使用更新后的 PC、通用寄存器和栈指针再次进入受控探针。
     assert_eq!(unsafe { __loongarch_kernel_test_call_abi(&mut context) }, 1);
     assert_user(&context, second, ExceptionCause::SystemCall, &second_regs);
 
     context.set_pc(privileged);
-    // SAFETY: 已映射探针尝试在 PLV3 读取 CSR，必须触发 trap，
-    // 不得改变任何整数寄存器或获得特权访问。
+    // SAFETY: 在 PLV3 下执行 `csrrd` 特权指令，必须触发 `InstructionPrivilege` 异常并返回内核。
     unsafe { run_user(&mut context) };
     assert_user(
         &context,
@@ -222,8 +208,7 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     );
 
     context.set_pc(floating);
-    // SAFETY: EUEN.FPE 为零，因此已映射浮点指令必须在访问扩展状态前
-    // 触发 trap；测试不依赖 FP 内容。
+    // SAFETY: `EUEN.FPE == 0` 时在 PLV3 下执行浮点指令，必须触发 `FloatingPointDisabled` 异常。
     unsafe { run_user(&mut context) };
     assert_user(
         &context,
@@ -232,11 +217,10 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
         &second_regs,
     );
 
-    // 撤销用户别名并同步翻译状态，使下一次取指发生 TLB miss。
+    // 临时撤销 `DMW1` 用户态窗口，使下一次进入 PLV3 取指触发 TLB refill。
     env.revoke();
     context.set_pc(first);
-    // SAFETY: 故意不映射的取指由 TLBRENTRY 捕获，
-    // context 和暂停的内核栈仍通过 DMW0 保持映射。
+    // SAFETY: 未映射的用户取指会由 `TLBRENTRY` 捕获并安全返回内核，内核代码与栈仍由 `DMW0` 映射。
     unsafe { run_user(&mut context) };
     assert_eq!(
         context.cause(),
@@ -249,10 +233,9 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     assert_eq!(context.registers(), &second_regs);
     assert_eq!(kernel_tp(), KERNEL_TP.load(Ordering::Relaxed));
 
-    // 重建用户别名，验证 refill 返回后正常异常处理仍然有效。
+    // 重新开启 `DMW1` 窗口，确认从 TLB refill 恢复后普通 `syscall` 依然工作正常。
     env.enable();
-    // SAFETY: 原始受控 syscall 指令再次被映射，
-    // 仍使用同一独占 context 及有效用户栈。
+    // SAFETY: 用户态映射已恢复，继续使用同一独占上下文执行受控 `syscall` 探针。
     unsafe { run_user(&mut context) };
     assert_user(&context, first, ExceptionCause::SystemCall, &second_regs);
     crate::println!("loongarch64: trap kernel tests passed");

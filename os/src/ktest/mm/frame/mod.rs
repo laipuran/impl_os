@@ -1,4 +1,4 @@
-//! 验证合成区间记账与真实启动分配器的回收，不解引用地址或耗尽真实物理内存。
+//! 物理页框分配器自检：覆盖合成区间记账与真实启动分配器的试分配回收。
 
 use alloc::{vec, vec::Vec};
 
@@ -132,7 +132,7 @@ fn invalid_maps() {
         }],
     ];
     for ram in invalid {
-        // 用一字节页构造合法地图，覆盖与分配器页大小不兼容的情况。
+        // 先以 1 字节对齐构造合法的 `MemoryMap`，再验证 `FrameAllocator::new` 能拒绝未按 4 KiB 对齐或超大区间。
         let map = MemoryMap::new(ram, vec![], 1).unwrap();
         assert!(FrameAllocator::new(map).is_err());
     }
@@ -156,7 +156,7 @@ fn boot_allocator(frames: &FrameAllocator) {
     assert_eq!(frames.available(), available, "boot frame was not recycled");
 }
 
-/// 验证真实启动页框的分配回收，以及合成区间的耗尽、边界和保留组合。
+/// 验证真实启动分配器的单页分配回收，以及合成区间下的空洞跨越、位图边界与 256 种保留掩码组合。
 pub fn kernel_test(frames: &FrameAllocator) {
     boot_allocator(frames);
     disjoint_regions_and_recycling();

@@ -1,4 +1,4 @@
-//! 启动期内核测试，仅在启用 `ktest` feature 时编译。
+//! 启动期内核白盒自检入口（仅在启用 `ktest` feature 时编译）。
 
 pub(crate) mod support;
 pub(crate) mod user_env;
@@ -12,7 +12,7 @@ struct Suite {
     run: fn(&FrameAllocator),
 }
 
-// 将测试套件选择与运行器及正常启动路径分离。
+// 按顺序执行的内核自检套件列表。
 const SUITES: &[Suite] = &[
     Suite {
         name: "user execution",
@@ -45,27 +45,24 @@ const SUITES: &[Suite] = &[
     },
 ];
 
-// 所有用户探针顺序执行，独占栈与架构映射贯穿整个执行组。
+// 在同一个 `UserEnv` 中顺序运行架构 Trap、系统调用 ABI 与任务生命周期三组用户态探针测试。
 fn user_execution() {
-    // SAFETY: 仅启动 CPU 执行此组，禁用中断且没有其他用户执行。
+    // SAFETY: 当前仅主核在关中断状态下执行自检，无其他并发的用户态切换。
     let mut env = unsafe { UserEnv::new() };
     crate::arch::trap::tests::kernel_test(&mut env);
     let stack = env.stack();
-    // SAFETY: 固定探针和独占栈均处于当前可信用户环境中；中断关闭，
-    // 各探针同步返回后才复用栈。RV 依赖 bare 模式下固件 PMP 允许访问 RAM；
-    // LA 的临时窗口映射 RAM。这些机制均不提供用户隔离。
+    // SAFETY: 测试探针与 4 KiB 测试栈均位于当前 `UserEnv` 可访问的 RAM 中；
+    // 全程保持中断关闭，且前一组测试同步返回后才会复用同一个测试栈。
     unsafe {
         crate::syscall::tests::kernel_test(env.address(crate::syscall::tests::entry()), stack);
         crate::task::tests::kernel_test(env.address(crate::task::tests::entry()), stack);
     }
 }
 
-/// 正常初始化后，按声明顺序运行配置的测试套件。
+/// 在内核基础子系统初始化完成后，按 `SUITES` 顺序依次运行全部自检套件。
 ///
-/// `frames` 是正常启动流程初始化的页框分配器，供测试借用，不重复初始化。
-/// 在禁用中断的 boot CPU 上调用。各套件必须在返回前恢复临时映射和机器状态；
-/// 断言失败会通过内核 panic handler 停机，
-/// 因此不会打印最终成功标记。
+/// `frames` 为启动流程创建的物理页框分配器引用。每个测试套件返回前都必须恢复其临时修改的硬件状态；
+/// 任何断言失败都会直接触发内核 panic 停机，只有全部通过才会打印最终的 `all kernel tests passed`。
 pub fn run(frames: &FrameAllocator) {
     for suite in SUITES {
         crate::println!("{}: running {} tests", crate::arch::NAME, suite.name);

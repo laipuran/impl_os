@@ -1,22 +1,27 @@
-//! Linux syscall 的整数寄存器 ABI 与最小调用分发。
+//! Linux 系统调用 ABI 解码、分发与返回值写回。
 //!
-//! [`decode`] 只读取现场；[`dispatch`] 决定返回或退出；[`complete`] 在调用
-//! 正常返回时写回结果并跳过 syscall 指令。退出路径不应调用 `complete`。
+//! 系统调用处理分为三步：
+//! 1. [`decode`] 从用户 [`TrapContext`] 中提取调用号与 6 个原始参数；
+//! 2. [`dispatch`] 执行系统调用逻辑，决定是正常返回还是终止当前任务；
+//! 3. 若正常返回，由 [`complete`] 将返回值写入 `a0` 并将异常 PC 推进 4 字节。
 
 use crate::arch::{syscall as syscall_abi, trap::TrapContext};
 
-/// 从用户 syscall 陷阱提取的原始调用号与六个机器字参数。
+/// 从用户态系统调用现场提取的调用号与 6 个原始参数。
 ///
-/// 参数保留全部位，不解引用用户指针，也不按具体调用解释有符号数。
+/// 参数保留完整的机器字位宽，本层不将其解释为有符号数，也不直接解引用用户指针。
 #[derive(Debug, PartialEq, Eq)]
 pub struct SyscallRequest {
-    /// Linux 调用号；未知调用号同样保留，交给分发层处理。
+    /// Linux 系统调用号。
     pub number: usize,
-    /// 按 Linux ABI 顺序排列的六个原始参数。
+    /// 按 Linux ABI 寄存器顺序排列的 6 个原始参数。
     pub args: [usize; 6],
 }
 
-/// 解码用户 syscall；内核调用、中断和其他异常返回 `None`，不修改现场。
+/// 从用户态 Trap 现场解码系统调用请求。
+///
+/// 若当前 Trap 不是来自用户态的系统调用（例如断点异常、中断或内核态调用），
+/// 则返回 `None` 且不修改 `context`。
 pub fn decode(context: &TrapContext) -> Option<SyscallRequest> {
     if !syscall_abi::is_syscall(context) {
         return None;
@@ -28,17 +33,15 @@ pub fn decode(context: &TrapContext) -> Option<SyscallRequest> {
     })
 }
 
-/// 完成一次正常返回的用户 syscall，写回原始结果并推进 PC。
+/// 完成一次正常返回的用户系统调用：将返回值写入 `a0` 并令异常 PC 前移 4 字节。
 ///
-/// `result` 使用 Linux 原始返回约定：成功值或负 errno，不进行 libc 的
-/// `-1`/`errno` 转换。只修改 `a0` 和 PC，保留其他整数寄存器与陷阱元数据。
-/// 两架构的 syscall 指令均长四字节，包括启用压缩指令的 RISC-V。
-/// 下次取指的有效性仍由用户映射和 trap 策略决定。
+/// `result` 遵循 Linux 内核返回约定：非负数表示成功返回值，负数表示 `-errno`
+///（不做用户态 libc 的 `-1` / `errno` 拆分）。仅更新返回值寄存器和 PC，其余通用寄存器
+/// 与异常 CSR 保持不变。RISC-V 的 `ecall` 与 LoongArch 的 `syscall 0` 指令长度均为 4 字节。
 ///
-/// 非用户 syscall 或 PC 加四溢出时返回 `false`，且不修改现场；调用者应将
-/// 完成失败交给任务异常处理策略，不能继续恢复该现场。
-/// 调用者须保证每次陷阱只完成一次；保存的异常原因不会因写回而清除。
-/// 退出、exec 和重启调用应采用各自的现场处理。
+/// 若 `context` 不是用户态系统调用现场，或 `pc + 4` 发生无符号整数溢出，则返回 `false`
+/// 且不修改 `context`。调用方此时应按任务异常终止处理，不得原样恢复执行。
+/// 注意：每次系统调用 Trap 只能调用一次 `complete`；`exit` 等不返回的调用不应调用本函数。
 #[must_use]
 pub fn complete(context: &mut TrapContext, result: isize) -> bool {
     if !syscall_abi::is_syscall(context) {
@@ -52,19 +55,18 @@ pub fn complete(context: &mut TrapContext, result: isize) -> bool {
     true
 }
 
-/// 调用分发后，执行循环应采取的动作。
+/// 系统调用分发后交由任务执行循环处理的动作。
 pub enum Outcome {
-    /// 按 Linux 原始返回约定写回结果，然后恢复用户执行。
+    /// 将返回值写回用户态寄存器并继续执行下一条指令。
     Return(isize),
-    /// 结束当前任务，不写回返回值或推进 PC。
+    /// 终止当前任务并记录退出码（不写回返回值，也不推进 PC）。
     Exit(u8),
 }
 
-/// 分发两架构共用的 Linux 调用号，不访问用户内存。
+/// 根据 Linux 系统调用号分发请求。
 ///
-/// 当前仅实现 `exit`（93）和 `exit_group`（94），取首参数的低八位作为
-/// 可观察退出码。任务尚无多线程，两者均结束当前任务。其他调用返回
-/// `-ENOSYS`（-38）；本层不修改现场，由执行循环决定是否正常完成调用。
+/// 目前仅实现 `exit`（93）和 `exit_group`（94），截取首个参数的低 8 位作为退出码；
+/// 其余调用号统一返回 `-ENOSYS`（-38）。
 pub fn dispatch(call: SyscallRequest) -> Outcome {
     match call.number {
         93 | 94 => Outcome::Exit(call.args[0] as u8),

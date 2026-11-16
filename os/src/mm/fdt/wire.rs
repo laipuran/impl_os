@@ -1,4 +1,4 @@
-//! FDT 大端整数、字符串和四字节对齐的边界检查。
+//! FDT 大端序整数读取、以 `\0` 结尾的字符串提取与 4 字节对齐辅助函数。
 
 pub(super) fn be32(data: &[u8], offset: usize) -> Result<u32, &'static str> {
     let end = offset.checked_add(4).ok_or("FDT offset overflow")?;

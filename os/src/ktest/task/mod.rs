@@ -1,4 +1,4 @@
-//! 在统一测试层提供的可信用户环境中执行任务生命周期探针。
+//! 最小用户任务（[`Task`]）生命周期与系统调用分发自检。
 
 use core::arch::global_asm;
 
@@ -30,7 +30,7 @@ extern "C" {
     fn task_test_fault();
 }
 
-/// 返回探针的内核地址；调用者按当前用户映射转换为用户入口。
+/// 返回任务测试探针的内核地址（由调用方通过 `UserEnv::address` 转换为用户态入口地址）。
 pub fn entry() -> usize {
     task_test_entry as *const () as usize
 }
@@ -45,39 +45,37 @@ fn snapshot(context: &TrapContext) -> ([usize; 32], usize, usize, usize, usize) 
     )
 }
 
-/// 验证终止任务再次运行不改变返回结果或已保存的完整现场。
+/// 验证已结束的任务再次调用 [`Task::run`] 会直接返回原结果且不会修改已保存的现场。
 ///
 /// # Safety
-/// 调用者须在本函数内持续满足 [`Task::run`] 的用户映射与独占执行约束。
+///
+/// 调用方须保证在测试期间持续满足 [`Task::run`] 的环境与映射前提。
 unsafe fn assert_finished(task: &mut Task, status: ExitStatus) {
     assert_eq!(task.state(), TaskState::Finished(status));
     let saved = snapshot(task.context());
-    // SAFETY: 调用者保持原有可信探针、用户映射及私有栈有效；
-    // 即使实现错误地再次进入用户态，也不访问暂停的内核状态。
+    // SAFETY: 测试探针、用户映射与测试栈均保持有效。
     assert_eq!(unsafe { task.run() }, status);
     assert_eq!(task.state(), TaskState::Finished(status));
     assert_eq!(snapshot(task.context()), saved);
 }
 
-/// 执行真实用户任务，验证未知 syscall、两种退出及故障后的继续执行。
+/// 运行用户态任务探针，验证未知系统调用返回 `-ENOSYS`、`exit`/`exit_group` 正常退出以及异常故障终止。
 ///
 /// # Safety
-/// 调用者须满足 [`Task::run`] 的前提；`user_entry` 必须是 [`entry`] 在用户
-/// 映射中的可执行地址，完整探针须可取指并保持各标签相对入口的偏移。
-/// `stack` 为测试环境独占的 4096 字节用户栈顶，须按 16 字节对齐。
-/// 整个测试期间保持映射有效、中断关闭，且仅在单 CPU 上执行；不提供隔离。
+///
+/// - 调用方须满足 [`Task::run`] 的安全前提；
+/// - `user_entry` 必须是 [`entry`] 在当前 `UserEnv` 映射下的可执行地址，`stack` 为 16 字节对齐的独占用户栈顶。
 pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
     let user_address =
         |label: unsafe extern "C" fn()| user_entry + (label as *const () as usize - entry());
     let mut task = Task::new(TrapContext::user(user_entry, stack));
     assert_eq!(task.state(), TaskState::Ready);
-    // SAFETY: 调用者提供完整可信探针与有效私有栈；用户代码仅操作寄存器，
-    // 连续检查两次 -ENOSYS 后以 exit 终止，不修改内核内存。
+    // SAFETY: 探针先发起两次未知系统调用（核对返回值 `-ENOSYS`），随后调用 `exit` 退出，不修改内核内存。
     assert_eq!(unsafe { task.run() }, ExitStatus::Exited(0x5a));
     assert_eq!(task.context().pc(), user_address(task_test_exit));
     assert_eq!(task.context().registers()[ARGUMENT_REGISTER], 0x1_2345_675a);
     assert_eq!(task.context().registers()[NUMBER_REGISTER], 93);
-    // SAFETY: 整个测试仍保持相同的可信代码、私有栈和用户映射有效。
+    // SAFETY: 同一受控测试环境仍然有效。
     unsafe { assert_finished(&mut task, ExitStatus::Exited(0x5a)) };
 
     let fault_pc = user_address(task_test_fault);
@@ -90,12 +88,11 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
     #[cfg(target_arch = "loongarch64")]
     let stack_register = 3;
     context.registers_mut()[stack_register] = stack;
-    // 即使寄存器看起来像 exit，也不能把 breakpoint 当成 syscall。
+    // 故意在调用号寄存器中填入 `exit`（93），验证断点异常不会被误判为系统调用。
     context.registers_mut()[NUMBER_REGISTER] = 93;
     let registers = *context.registers();
     let mut fault = Task::new(context);
-    // SAFETY: 此独立入口只执行 breakpoint；使用新建现场和同一有效私有栈，
-    // 不依赖前一任务或 syscall 自检留下的上下文。
+    // SAFETY: `task_test_fault` 仅包含一条断点指令，触发 Trap 后立即返回内核。
     assert_eq!(unsafe { fault.run() }, ExitStatus::Faulted);
     assert_eq!(fault.context().pc(), fault_pc);
     assert_eq!(fault.context().registers(), &registers);
@@ -114,18 +111,17 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
         assert_eq!(fault.context().raw_cause() & !0x1fff, 12 << 16);
         assert_eq!(fault.context().raw_status() & 0xf, 3);
     }
-    // SAFETY: 故障探针、用户栈与映射保持有效，故障任务仍由此处独占。
+    // SAFETY: 同一受控测试环境仍然有效。
     unsafe { assert_finished(&mut fault, ExitStatus::Faulted) };
     let saved_fault = snapshot(fault.context());
 
-    // 故障返回后运行全新正常任务，证明内核可继续进入用户态并处理 exit_group。
+    // 在前一个任务因故障终止后新建第二个正常任务，确认内核可继续运行后续任务并正确处理 `exit_group`。
     let mut group = Task::new(TrapContext::user(
         user_address(task_test_group_entry),
         stack,
     ));
     assert_eq!(group.state(), TaskState::Ready);
-    // SAFETY: 此独立探针仅设置 exit_group 参数并触发 syscall；
-    // 前一任务已同步返回，不会并发使用该架构私有用户栈。
+    // SAFETY: 独立探针仅设置参数并调用 `exit_group`（94），前序任务已结束，不会并发占用测试栈。
     assert_eq!(unsafe { group.run() }, ExitStatus::Exited(0xfe));
     assert_eq!(group.context().pc(), user_address(task_test_exit_group));
     assert_eq!(
@@ -133,7 +129,7 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
         usize::MAX - 1
     );
     assert_eq!(group.context().registers()[NUMBER_REGISTER], 94);
-    // SAFETY: 此正常任务的代码、私有栈与映射仍然有效，且无并发用户执行。
+    // SAFETY: 同一受控测试环境仍然有效。
     unsafe { assert_finished(&mut group, ExitStatus::Exited(0xfe)) };
     assert_eq!(snapshot(fault.context()), saved_fault);
     crate::println!("{}: task kernel tests passed", crate::arch::NAME);

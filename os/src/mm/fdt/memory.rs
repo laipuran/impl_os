@@ -1,4 +1,4 @@
-//! 解释节点中的内存属性，收集 RAM、静态保留区和 initrd。
+//! 设备树内存节点（`memory`）、保留内存节点（`/reserved-memory`）与 `/chosen` initrd 属性解析。
 
 use alloc::vec::Vec;
 

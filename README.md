@@ -1,71 +1,65 @@
 # impl_os
 
-面向 OS 内核实现赛的 Rust `no_std` 内核，支持 RISC-V 和 LoongArch 两个构建目标，使用 QEMU `virt` 运行。
+面向全国大学生计算机系统能力大赛操作系统设计赛（内核实现赛）的 Rust `no_std` 内核，支持 RISC-V 64 与 LoongArch 64 双架构，运行于 QEMU `virt` 平台。
 
 ## 构建目标
 
-| 架构 | Rust target | 输出文件 |
+| 架构 | Rust Target | 产物路径 |
 | --- | --- | --- |
 | RISC-V 64 | `riscv64gc-unknown-none-elf` | `kernel-rv` |
 | LoongArch 64 | `loongarch64-unknown-none` | `kernel-la` |
 
-构建产物均为 ELF。Rust 工具链固定为 `nightly-2025-01-18`，配置见 `rust-toolchain.toml`。
+构建产物均为 ELF 格式。编译器工具链固定为 `nightly-2025-01-18`（见 [`rust-toolchain.toml`](rust-toolchain.toml)）。
 
-## 开始开发
+## 快速上手
 
-1. 宿主安装 Docker、VS Code 和 Dev Containers 扩展。
-2. 打开本目录，执行 **Dev Containers: Reopen in Container**。开发容器基于固定的比赛镜像，补充 just、配套的 rust-analyzer 和标准库源码。
-3. 在容器内执行：
+推荐使用 VS Code Dev Containers 开发。开发容器基于官方比赛镜像构建，已预装 `just`、`rust-analyzer` 与标准库源码：
 
-```bash
-just                 # 列出任务及职责
-just doctor
-just build           # 调用 make all，生成 ELF：kernel-rv、kernel-la
-just run rv          # 构建并在 QEMU 中运行 RISC-V 内核
-just run la          # 构建并在 QEMU 中运行 LoongArch 内核
-just debug rv        # 构建 debug 内核，等待 GDB 连接 :1234
-just check           # 检查格式和双架构 Clippy，不执行启动测试
-just test            # 可选：全部内核自检；默认 rv release，可追加 la 或 la debug
-```
-
-RISC-V 启动后通过 SBI 请求关机；LoongArch 启动后停放 CPU，QEMU 不会自动退出，可按 `Ctrl-a x` 退出。
-
-`make all` 使用 Cargo 的 `--locked --offline`，通过显式配置读取仓库已提交的 `vendor/`，无需预填 registry 缓存；环境仍须提供固定工具链和目标标准库。环境配置见[环境准备](docs/getting-started/environment.md)。普通的 `cargo build` 没有指定裸机 target，不是本项目的构建入口。
-
-## 目录职责
-
-| 路径 | 职责 |
-|---|---|
-| `.devcontainer/` | VS Code 开发容器，固定比赛镜像 tag + digest |
-| `os/` | `no_std` Rust 内核、构建脚本与架构链接脚本 |
-| `docs/` | 架构、环境、开发命令和检查说明 |
-| `artifacts/` | 被忽略的本地测试镜像、串口日志等大文件 |
-| `target/` | Cargo 生成目录，不提交 |
-| `Makefile` | 本地开发与比赛 `make all` 的统一入口 |
-| `justfile` | 开发任务编排；构建委托 Make，不复制构建逻辑 |
-| `rust-toolchain.toml` | 固定 Rust nightly、裸机 targets 与组件 |
-
-命令职责见[任务分工表](docs/development/targets.md)，模块边界见[代码结构](docs/architecture/layout.md)。完整导航见 [docs/README.md](docs/README.md)。
-
-## 不使用 VS Code
-
-在**宿主**执行（需要 Docker、just）：
+1. 在宿主机安装 Docker、VS Code 及 Dev Containers 扩展。
+2. 用 VS Code 打开仓库根目录，执行 **Dev Containers: Reopen in Container**。
+3. 在容器终端中执行常用命令：
 
 ```bash
-just image-pull       # 显式下载比赛基础镜像
-just image-build      # 构建薄开发镜像
-just container        # 进入开发终端
-just container just check
-just judge-build      # 原始比赛镜像，断网、独立构建目录；不启动内核
+just                 # 查看所有可用的开发任务
+just doctor          # 检查工具链与模拟器环境是否就绪
+just build           # 调用 make all 编译双架构内核，生成 kernel-rv 和 kernel-la
+just run rv          # 编译并在 QEMU 中启动 RISC-V 内核
+just run la          # 编译并在 QEMU 中启动 LoongArch 内核
+just debug rv        # 以 debug 模式启动 QEMU，在 :1234 端口等待 GDB 连接
+just check           # 运行 rustfmt 格式检查与双架构 Clippy 静态检查
+just test            # 运行内核启动自检（默认 rv release，可传 la 或 la debug）
 ```
 
-`judge-build` 在原始比赛镜像中关闭网络，过滤源码中的隐藏文件和目录，并使用空 Cargo 缓存及独立构建目录验证双架构离线构建。新增或更新依赖后，须执行 `just vendor`，一并提交依赖清单、`Cargo.lock` 和 `vendor/` 的变更，详见[依赖更新流程](docs/development/README.md#更新离线依赖)。
+> **提示：** RISC-V 内核运行结束后会通过 SBI 请求关机并自动退出 QEMU；LoongArch 暂未实现关机接口，内核在末尾会让 CPU 进入 `idle` 循环，可按 `Ctrl-a x` 退出 QEMU。
 
-## 构建与提交约定
+### 不使用 VS Code（命令行容器工作流）
 
-- 根目录 `make all` 生成 ELF，不以 raw binary 替代。
-- 构建不依赖 `.cargo/` 或 `.vscode/` 等隐藏配置：链接参数来自 `os/build.rs`，因此隐藏目录被评测过滤后仍可构建。
-- Rust 依赖由 `os/Cargo.toml` 声明，版本由仓库内的 `Cargo.lock` 锁定；`log` 禁用默认特性以用于 `no_std` 环境。
-- 比赛 `make all` 不依赖 just、Docker 或 Dev Container 配置。
-- 开发命令直接写在 `justfile` 中，构建逻辑集中在 `Makefile`。
-- 仓库公开、HTTPS 提交、最终启动参数及评分规则以比赛平台为准。
+若不使用 VS Code，可在**宿主机**通过 `just` 和 Docker 直接操作容器：
+
+```bash
+just image-pull                  # 拉取固定版本的官方比赛基础镜像
+just image-build                 # 构建本地开发镜像
+just container                   # 启动并进入开发容器交互终端
+just container just check        # 在容器内单次执行指定命令
+just judge-build                 # 模拟评测机环境：使用原始比赛镜像断网编译双架构内核
+```
+
+## 目录结构
+
+| 路径 | 说明 |
+| --- | --- |
+| `os/` | 内核主 crate，包含共享内核逻辑、架构相关汇编与链接脚本 |
+| `docs/` | 环境配置、架构设计、构建任务分工与测试文档（见 [文档导航](docs/README.md)） |
+| `cargo/config.toml` | Cargo 离线构建配置，将 crates.io 源重定向至仓库内的 `vendor/` |
+| `vendor/` | 随仓库提交的第三方依赖源码，供评测环境离线编译 |
+| `.devcontainer/` | 开发容器配置与 Dockerfile |
+| `artifacts/` | 本地测试镜像、日志等大文件存放目录（Git 忽略） |
+| `Makefile` | 比赛评测入口（`make all`）与底层编译逻辑 |
+| `justfile` | 日常开发命令封装（构建任务统一转发给 `Makefile`） |
+| `rust-toolchain.toml` | 固定的 Rust 工具链版本、编译目标与必装组件 |
+
+## 构建与评测约定
+
+- **构建入口：** 评测机固定在仓库根目录执行 `make all`。直接运行不带 `--target` 的 `cargo build` 无法编译本内核。
+- **离线构建：** `make all` 使用 `--locked --offline` 并读取 `vendor/` 下的依赖源码，编译过程无需联网。如果新增或升级了依赖，需在开发环境运行 `just vendor` 并一并提交 `Cargo.toml`、`Cargo.lock` 和 `vendor/`（详见 [依赖维护说明](docs/development/README.md#维护离线依赖)）。
+- **不依赖隐藏目录：** 评测平台可能过滤 `.cargo/`、`.vscode/` 等隐藏目录，因此链接脚本与编译参数统一由 `os/build.rs` 注入，Cargo 配置放在非隐藏的 `cargo/config.toml` 中。

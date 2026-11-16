@@ -1,4 +1,4 @@
-//! 内核堆、启动期物理内存地图及物理页框分配。
+//! 内存管理子系统：静态内核堆、启动期物理内存发现与物理页框分配器。
 
 pub(crate) mod boot_memory;
 pub(crate) mod fdt;
@@ -6,29 +6,29 @@ pub(crate) mod frame;
 pub(crate) mod heap;
 pub(crate) mod regions;
 
-/// 依次初始化内核堆、发现物理内存，并返回管理可用页的分配器。
+/// 初始化内核静态堆、解析启动内存布局，并构建管理可用物理页的 [`frame::FrameAllocator`]。
 ///
-/// 必须早于首次堆分配。返回的分配器由调用者持有；启动数据不回收。
-/// 初始化失败后不支持重试，因为内核堆已经初始化。
-/// 没有完整可用页时返回空分配器，由后续分配请求报告资源不足。
+/// 必须在首次堆分配前调用，且只允许调用一次（即使后续内存发现报错，静态堆也已初始化，不支持重试）。
+/// 若扣除保留区并按页对齐后没有任何完整的可用物理页，仍会返回一个总容量为 0 的分配器，
+/// 由后续的页框分配调用按资源耗尽处理。
 ///
 /// # Errors
 ///
-/// 启动内存描述无效或不受支持，或堆无法容纳页框位图及索引时返回错误。
+/// 当平台启动数据、设备树内存描述不合法或超出支持范围，或者静态堆空间不足以分配页框位图及索引时返回错误。
 ///
 /// # Panics
 ///
-/// 重复初始化、内核未完整位于描述的 RAM 中，或启动信息解析期间堆分配失败时 panic。
+/// 当重复调用本函数、内核镜像（`skernel..ekernel`）未完整落在 RAM 区间内，或解析设备树期间堆内存耗尽时 panic。
 ///
 /// # Safety
 ///
-/// 仅在关闭中断的 boot CPU 上调用，不支持并发或中断重入。
-/// `boot_arg` 必须是架构入口整理的平台启动参数；启动数据必须完整、可读且
-/// 在发现期间不变，并已建立该架构要求的启动内存访问方式。
+/// - 仅可在关闭中断的启动主核上调用一次，不支持多核并发或中断重入。
+/// - `boot_arg` 必须是入口汇编按当前架构启动协议传入的参数；其指向的启动数据在初始化期间必须完整、可读且不被修改，
+///   并且当前架构已建立访问该启动数据所需的地址映射（如 RISC-V 物理直通或 LoongArch `DMW0`）。
 pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static str> {
     heap::init();
 
-    // SAFETY: 调用者保证平台参数、启动数据及架构访问方式有效。
+    // SAFETY: 调用方已保证 `boot_arg`、启动数据存储及当前架构的早期映射有效。
     let memory = unsafe { crate::arch::boot::memory(boot_arg) }?;
     let map = discover(memory)?;
 
@@ -43,17 +43,17 @@ pub unsafe fn init(boot_arg: usize) -> Result<frame::FrameAllocator, &'static st
     Ok(frames)
 }
 
-/// 整理平台已解析的内存描述，并扣除内核占用。
+/// 将内核镜像自身占用的物理区间加入保留列表，并生成归一化后的 [`regions::MemoryMap`]。
 ///
-/// 不访问原始启动存储；平台层已在输入中保留 FDT 本体和其他启动数据。
+/// 平台层在构造 `memory` 时已将 FDT 本体、EFI 启动块及 `initrd` 等列入 `reserved`。
 ///
 /// # Errors
 ///
-/// 物理区间或内核链接边界无效，或未描述 RAM 时返回错误。
+/// 当物理区间无效、内核链接符号边界异常或未描述任何 RAM 时返回错误。
 ///
 /// # Panics
 ///
-/// 内核物理地址区间未完整包含在描述的 RAM 中时 panic。
+/// 当内核镜像物理区间未完整落在已描述的 RAM 区间内时 panic。
 fn discover(mut memory: boot_memory::BootMemory) -> Result<regions::MemoryMap, &'static str> {
     use crate::arch::boot;
     use regions::MemoryMap;
