@@ -1,97 +1,101 @@
-# 仓库指南
+# 仓库开发与协作指南（`AGENTS.md`）
 
 ## 项目概述
 
-`impl_os` 是面向操作系统实现赛的 Rust `no_std`、`no_main` 内核，支持 RISC-V 和 LoongArch。
+`impl_os` 是面向全国大学生计算机系统能力大赛操作系统设计赛（内核实现赛）的 Rust `#![no_std]`、`#![no_main]` 内核，同时支持 RISC-V 64（`riscv64gc-unknown-none-elf`）与 LoongArch 64（`loongarch64-unknown-none`）双架构，运行于 QEMU `virt` 平台。
 
-## 架构与数据流
+## 构建架构与目录职责
 
-- `just` 将产物构建委托给 `make`；Make 分别调用 Cargo 构建两个目标，`os/build.rs` 选择对应链接脚本。
-- 平台假设见 `docs/architecture/boot.md`。
+- **构建链路**：日常开发命令通过 `justfile` 编排，其中内核编译统一委托给根目录 `Makefile`。比赛评测入口为 `make all`，通过 Cargo `--locked --offline` 读取仓库内的 `vendor/` 离线编译双架构 ELF（`kernel-rv`、`kernel-la`）。`os/build.rs` 根据目标架构自动注入对应的链接脚本与链接参数，不依赖可能被评测机过滤的 `.cargo/` 隐藏目录。
+- **主要目录**：
+  - `os/`：内核主 crate、构建脚本（`build.rs`）、共享内核模块及双架构启动/Trap/链接代码（`os/src/arch/{riscv64,loongarch64}/`）。
+  - `docs/`：环境搭建、日常工作流、架构设计、构建任务分工与测试验证文档（详见 [`docs/README.md`](docs/README.md)）。
+  - `cargo/config.toml` 与 `vendor/`：Cargo 离线源重定向配置与随仓库提交的第三方依赖源码。
+  - `.devcontainer/`：基于官方固定比赛镜像派生的开发容器配置。
+  - `artifacts/`：被 Git 忽略的本地测试磁盘镜像、串口日志与调试临时文件（详见 [`artifacts/README.md`](artifacts/README.md)）。
+- **关键文件**：
+  - `os/src/main.rs`：内核 Rust 入口 `kernel_main`、BSS 清零与早期初始化流程。
+  - `os/src/console.rs` 与 `os/src/lang_items.rs`：早期串口输出、`println!` 宏、全局堆分配失败与 panic 停机处理。
+  - `Makefile`、`justfile`、`Cargo.toml`、`os/Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`：构建契约与工具链锁定配置。
 
-## 主要目录
+## 运行环境与工具链约束
 
-- `os/`：内核 crate、构建脚本以及架构相关的启动和链接代码。
-- `docs/`：架构、环境、开发和测试说明。
-- `.devcontainer/`：基于固定比赛镜像的开发容器。
-- `artifacts/`：被忽略的本地测试镜像和日志；`target/` 存放 Cargo 生成物。
+- **开发环境**：使用 Linux/amd64 开发容器（VS Code Reopen in Container，或在宿主机依次执行 `just image-pull`、`just image-build`、`just container`）。
+- **工具链锁定**：固定为 `nightly-2025-01-18`。缺失工具链组件时可在容器内显式执行 `just setup` 安装；注意 Cargo 的 `--offline` 不会阻止 `rustup` 自动联网，评测复核统一使用宿主机的 `just judge-build`。
+- **禁止无 target 编译**：直接执行不带 `--target` 的普通 `cargo build` 不是本项目的构建入口，请始终使用 `make all` 或 `just build` / `just check` / `just test`。
 
-## 代码约定与常用模式
+## 编码约定与内核开发准则
 
-- 使用 `cargo fmt` 保持 Rust 格式；函数和模块使用 `snake_case`，保持现有清晰的模块边界。
-- 使用 `core` 和兼容目标架构的 `no_std` 依赖，保持锁定依赖、离线构建及双目标可用。添加依赖前参阅 `docs/development/README.md`。
-- 底层代码使用 volatile MMIO，并依赖明确的 unsafe 不变量。遵守启动栈与 BSS 的边界和单 CPU 假设；panic 必须停机，不能报告成功关机。
+- **代码风格**：保持清晰的模块边界，函数与模块使用 `snake_case`，提交前通过 `just fmt`（`cargo fmt --all`）保持格式统一。
+- **架构解耦**：与特定 ISA、CSR、汇编或平台启动表相关的实现收敛在 `os/src/arch/` 下，共享内核模块通过 `crate::arch` 访问硬件能力，避免在业务代码中散落 `#[cfg(target_arch = ...)]`。
+- **底层安全与硬件假设**：
+  - 严格遵守启动栈（`.bss.stack`）与 BSS 清零区间（`sbss..ebss`）的边界，以及当前单核、关中断的执行假设。
+  - 底层 MMIO 访问需使用 `read_volatile` / `write_volatile`；不得将未经校验的用户态裸指针直接转换为 Rust 引用。
+  - 内核发生 panic 或致命异常时必须调用 `arch::halt()` 挂起 CPU，严禁调用 `arch::shutdown()` 伪造正常关机。
+- **依赖管理**：仅引入兼容双架构的 `no_std` 依赖。新增或更新依赖前参阅 [`docs/development/README.md`](docs/development/README.md)，通过 `just vendor` 更新离线源码并一并提交 `Cargo.toml`、`Cargo.lock` 与 `vendor/`。
 
-## Rust 注释与文档
+## Rust 注释与文档规范
 
-遵循 Rust API Guidelines 的 Documentation 部分和 rustdoc Book，并保持与所在模块的现有注释语言、术语及风格一致。根据需要添加或更新注释，保留仍然准确的既有注释。
+遵循 [Rust API Guidelines (Documentation)](https://rust-lang.github.io/api-guidelines/documentation.html) 与 [The rustdoc Book](https://doc.rust-lang.org/rustdoc/)，统一使用自然、准确的中文编写注释，避免生硬的机器直译、句中硬换行或中英混杂。
 
-### 文档注释
+### 文档注释（`///` 与 `//!`）
 
-- 使用 `///` 描述类型、trait、函数等条目，使用 `//!` 描述 crate 或模块。
-- 对外公开的 API 应有文档；私有条目仅在职责、约束或行为不直观时补充。
-- 首行用一句话概括用途，详细说明另起一段。说明输入限制、边界行为、单位、副作用及重要约束，不重复签名已清楚表达的类型信息。
-- 按实际情况添加章节，不生成空章节或固定模板：`# Examples` 展示代表性用法并优先提供可运行的 doctest；`# Errors` 说明返回 `Err` 的条件；`# Panics` 说明已知 panic 条件；`# Safety` 说明 unsafe API 的调用者必须满足的安全前提。
-- 引用代码条目时优先使用 rustdoc 链接，例如 [`Self::new`]。不为每个简单函数机械添加示例；相关 API 可共享示例并相互链接。
+- 使用 `//!` 概述模块职责与核心不变量，使用 `///` 描述公开结构体、枚举、trait 和函数；私有条目仅在职责、边界条件或安全前提不直观时补充文档注释。
+- 首行用简明的一句话概括用途，详细说明另起一段。重点交代输入约束、边界行为、地址类型（物理地址 vs 虚拟地址）、生命周期与副作用，不机械重复函数签名已表达的类型信息。
+- 按实际需要添加标准章节（不生成空章节或生搬硬套模板）：
+  - `# Errors`：说明返回 `Err` 的触发条件；
+  - `# Panics`：说明已知会触发 panic 的条件；
+  - `# Safety`：逐条列出 `unsafe fn` 调用方必须满足的安全前提（如特权级、关中断、地址映射、对齐与独占访问要求）；
+  - `# Examples`：需要展示典型用法时提供示例，切勿通过随意添加 `ignore` / `no_run` 掩盖错误的示例代码。
+- 引用代码条目时优先使用 rustdoc 内部链接（如 `[`Self::new`]`）。
 
-### 实现注释
+### 实现注释（`//`）
 
-- 使用 `//` 解释设计原因、约束、不变量和非显然的边界处理；不逐行翻译代码，不添加显而易见的说明或无意义的分段标题。
-- 为新增或修改的 unsafe 块和 unsafe impl 提供 `// SAFETY:`，具体解释此处如何满足安全要求，不能只写“这是安全的”。
-- 临时绕过方案应说明原因和移除条件；有相关 issue 时附上引用。
-- 修改代码时同步更新相关注释，删除失效或误导性的注释；不保留大段被注释掉的旧代码，用版本控制追溯历史。
+- 使用 `//` 解释**为什么这样设计（Why）**、硬件规范约束、数据布局不变量以及非显然的边界处理；不要逐行翻译代码逻辑，也不要添加无意义的分隔线或显而易见的废话注释。
+- 每个 `unsafe` 块和 `unsafe impl` 必须紧邻附上 `// SAFETY:` 注释，具体说明当前上下文如何满足对应的安全前提，不能只写笼统的“此处是安全的”。
+- 临时绕过方案（`TODO` / `FIXME`）需注明原因及后续移除或补齐的条件。
+- 修改代码时同步更新或删除已失效的注释，不保留大段被注释掉的废弃代码。
 
-### 验证
+### 验证要求
 
-- 修改文档示例后，运行适用的 `cargo test --doc`；修改 rustdoc 注释或链接后，运行适用的 `cargo doc --no-deps`，并修复本次修改引入的文档警告。当前内核是禁用测试和基准测试 harness 的裸机二进制，应先确认目标及命令适用性，不要将这些命令视为现有内核测试入口。
-- 不通过添加 `ignore` 或 `no_run` 掩盖示例错误；仅在示例确实无法运行时使用，并说明原因。
+- 修改代码或注释后，运行 `just check`（格式检查 + 双架构默认与 `ktest` 配置的 Clippy）、`just test rv`、`just test la`，以及双架构 `cargo doc --no-deps`，修复所有编译、Clippy 或 rustdoc 警告。
 
-## 重要文件
+## AI 相关文件与仓库卫生
 
-- `os/src/main.rs`：Rust 入口、BSS 清零和 panic 处理。
-- `os/src/console.rs`：`core::fmt::Write` 适配器和 `println!`。
-- `os/src/arch/{riscv64,loongarch64}/`：`entry.S`、`linker.ld` 和平台操作。
-- `os/build.rs`：目标校验和链接参数；不依赖隐藏的 `.cargo/` 配置。
-- `Makefile`、`justfile`、`Cargo.toml`、`os/Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`：构建契约、工作流和工具链配置。
-
-## 运行环境与工具偏好
-
-使用 Linux/amd64 开发容器或文档说明的等价环境；宿主机可依次运行 `just image-pull`、`just image-build`、`just container`。工具链固定为 `nightly-2025-01-18`，目标为 `riscv64gc-unknown-none-elf` 和 `loongarch64-unknown-none`。必要时通过 `just setup` 显式安装工具链组件。`make all` 使用 Cargo `--locked --offline`；不指定目标的普通 `cargo build` 不是项目构建入口。Cargo 离线模式不阻止 rustup 尝试安装缺失的工具链。
-
-## 测试与质量保障
-
-见 `docs/testing/README.md`，本地镜像管理见 `artifacts/README.md`。
-
-## AI 相关文件与代码卫生
-
-- 不要将除`AGENTS.md/CLAUDE.md`等规范文件外的 AI 相关文件或产物提交到 Git，包括 AI 工具配置、提示词、对话记录或生成的会话元数据。
-- 本地开发必需的 AI 相关文件保持未跟踪。使用 `.git/info/exclude` 或全局 Git 忽略文件防止意外提交；不要仅为本地 AI 工具修改项目共享的 `.gitignore`。
-- 不要在项目源代码、注释、文档或提交信息中加入 AI 工具、AI 生成归属或其他 AI 参与痕迹。
-- AI 辅助的代码修改必须遵循项目现有约定，并达到与其他贡献相同的质量标准。
-- 优先使用清晰命名、直接的控制流和小而专注的函数，并按照 Rust 注释与文档规范添加必要的注释。
-- 保持改动聚焦于请求的任务，避免无关重构、格式变更、依赖更新或生成文件。
+- 除 `AGENTS.md` / `CLAUDE.md` 等项目规范文件外，严禁将任何 AI 工具配置、提示词、技能脚本（`.agents/`）、对话记录或会话元数据提交到 Git。
+- 本地开发使用的未跟踪文件应通过 `.git/info/exclude` 或全局 Git 忽略配置管理，不要为了忽略本地个人工具文件而修改共享的 `.gitignore`。
+- 严禁在源代码、注释、文档或 Commit / PR 信息中留下 AI 工具名称、生成归属或任何 AI 参与痕迹。
+- 保持改动聚焦于当前任务，不顺手混入无关的重构、大范围格式刷写或未请求的依赖升级。
 
 ## Git 与提交纪律
 
-- 完成并验证每个完整的工作单元后，及时准备提交，并展示拟议改动和提交信息供审阅。
-- 每次 `git commit` 前都必须取得用户明确确认；不得将实现获批或先前提交获批视为新提交的授权。
-- 不提交未完成或已知损坏的改动。
-- 使用 Conventional Commits 格式 `<type>(<optional scope>): <description>`，例如 `fix(parser): handle empty input`。
-- 提交信息简洁、具体，准确描述改动，并遵循仓库既有语言和范围约定。
-- 每次提交聚焦一个逻辑变更；不相关的变更分开提交。
-- 请求提交确认前，运行相关检查并审阅暂存差异和暂存文件列表，确保不包含 AI 相关文件、AI 引用、密钥、临时产物或无关改动。
-- 有选择地暂存文件；未经明确授权，不包含、丢弃或覆盖用户已有改动。
-- 除非明确要求，不修改已有提交、不改写历史、不强制推送，也不推送到远程。
+- **原子提交**：每次提交聚焦一个独立的逻辑变更；不相关的重构、修复或功能应拆分为独立提交。不提交未完成或编译/测试不过的改动。
+- **提交信息格式**：遵循 [Conventional Commits](https://www.conventionalcommits.org/) 规范：`<type>(<optional scope>): <description>`（如 `feat(mm): add SV39 page table mapper`、`fix(trap): preserve sscratch on nested kernel trap`、`docs: rework project documentation and code comments`）。标题简洁具体，准确传达改动意图。
+- **显式确认**：完成并验证每个工作单元后，先向用户展示暂存文件列表（`git status`）、差异摘要与拟议的提交信息。**每次执行 `git commit` 前都必须获得用户的明确授权**，不得将“同意代码实现”或“同意上一次提交”视为新提交的授权。
+- **暂存与历史保护**：有选择地暂存目标文件，提交前复核 `git diff --staged`，确保未混入测试镜像、编译产物（`kernel-rv`、`kernel-la`）、临时文件或本地配置。未经用户明确要求，严禁包含或丢弃用户已有的未提交改动，严禁执行 `commit --amend`、`rebase`、改写历史或推送到远程仓库（`git push`）。
 
-## PR 正文规范
+## Pull Request（PR）正文规范
 
-- 以 PR 相对目标分支的实际提交和差异为依据，面向代码审阅者总结变更，不复述对话、操作过程或逐轮修改记录。
-- 突出变更目的和核心功能，按重要性与抽象层级组织内容。局部修正、符号标注等实现细节归入所属功能；除非影响兼容性、风险或审阅判断，不与核心功能并列，也不因讨论过就单独强调。
-- 遵循常见 PR 写法，按需要说明概述、主要变更、验证、范围与限制；保持简洁，不机械堆砌章节或逐文件罗列改动。
-- 验证部分只列实际执行的检查及结果，明确影响结论的验证边界；不把开发排错过程写成变更摘要。
-- 正文应独立可读，不依赖聊天背景，不包含“按你的要求”“最新一轮修改”等对话式表述。
+参照 Google Engineering Practices 与主流开源内核项目（Linux / Asterinas / Rust）的 PR 规范，PR 描述应面向代码审阅者与未来维护者，基于分支相对目标分支的**最终净变更（net diff）与提交序列**撰写，独立可读：
+
+1. **标题与粒度**：标题遵循 Conventional Commits 格式；单个 PR 聚焦同一主题或里程碑子任务，避免将不相关的模块改动塞入巨型 PR。
+2. **推荐正文结构**（按实际变更复杂度裁剪，不堆砌空章节）：
+   - **背景与目的（Motivation / Why）**：简明交代为什么要做这项改动——解决什么问题、对应哪个架构约束或比赛阶段目标，而非仅仅复述改了哪些文件。
+   - **核心变更与设计决策（Key Changes & Design）**：按抽象层级从高到低说明架构设计、模块职责边界、关键不变量（如内存所有权、页表生命周期、特权级与关中断假设）以及重要的取舍原因。局部符号调整、辅助函数抽取等实现细节归入所属特性，不与核心功能并列，也不逐文件罗列修改流水账。
+   - **验证方式与边界（Verification）**：如实列出已执行的检查命令与测试结果（如 `just check`、`just test rv`、`just test la`、`just judge-build` 或具体测例输出），并明确说明当前尚未覆盖的边界或后续计划。
+3. **文风要求**：保持客观、专业、精炼。严禁把开发过程中的排错弯路、多轮修改记录写成变更摘要，严禁出现“按你的要求”“最新一轮修改”等依赖聊天上下文的表述。
 
 ## PR Review 规范
 
-- 提交 PR Review 时，针对具体代码或文档的问题使用锚定 diff 对应行或行范围的行内评论，让 GitHub 自动展示相关上下文；不要仅在 Review 正文中用文件路径和行号描述问题位置。
-- Review 正文只保留整体结论、验证边界及无法归属具体行的全局问题，不重复行内评论的详细内容。
+遵循高召回率、建设性与行内锚定原则（参考 Google Code Review Guidelines 与 Conventional Comments）：
+
+1. **审阅重心**：
+   - **正确性与硬件/ABI 契约**：特权级切换、CSR 读写、汇编栈帧对齐、被调用者保存寄存器、页表/TLB 同步、Linux 系统调用 ABI 语义是否正确。
+   - **内存安全与 `unsafe` 不变量**：`unsafe` 块是否具备充分的安全前提，是否存在悬垂物理页、未校验用户指针、越界读写、整数溢出或并发/重入隐患。
+   - **架构可维护性与文档一致性**：是否破坏了 `arch` 与通用内核模块的边界，注释与文档是否与代码实际行为完全一致。
+2. **行内评论（Inline Comments）**：
+   - 针对具体代码或文档的缺陷，**必须将评论锚定在 diff 对应的行或行范围上**，让 GitHub 直接展示代码上下文；不要把具体代码问题全部堆在 Review 总结正文里靠文件名和行号口述。
+   - 每条评论应清晰说明：**问题是什么（What）**、**为什么会引发错误或违反哪条规范（Why）** 以及 **具体可落地的修复建议（Fix）**。
+   - 明确区分严重程度（如阻塞合并的 `bug` / `security` / ` soundness` 缺陷，与非阻塞的代码风格/可读性建议 `nit`）。
+3. **Review 总结正文（Summary Body）**：
+   - 正文只保留整体审阅结论、验证覆盖范围以及无法归属到具体单行代码的跨模块架构问题，不重复罗列行内评论的细节。
