@@ -23,7 +23,7 @@ pub(crate) fn putchar(byte: u8) {
 }
 
 pub(crate) fn shutdown() -> ! {
-    // SAFETY: 调用 SBI v0.2 System Reset 扩展（EID = 0x53525354，FID = 0）请求关机；
+    // SAFETY: 按 SBI v0.2+ 寄存器调用约定，调用 SBI v0.3 引入的 System Reset（SRST）扩展（EID = 0x53525354，FID = 0）请求关机；
     // 若固件不支持该扩展而返回，则回退到下方的 `halt()` 挂起 CPU。
     unsafe {
         asm!(

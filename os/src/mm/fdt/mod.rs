@@ -1,7 +1,8 @@
 //! 扁平设备树（FDT / DTB）物理内存与保留区解析器。
 //!
 //! 本模块仅在安全的字节切片（`&[u8]`）上解析启动内存布局（RAM、保留表、`/reserved-memory` 与 `initrd`），
-//! 不涉及裸指针解引用或外设枚举。原始 FDT 地址映射及 FDT 本体空间的保留由 [`crate::arch::boot_data`] 负责。
+//! 不涉及裸指针解引用或外设枚举。原始 FDT 地址的可访问性与架构映射由各架构早期启动代码保证，
+//! 已映射存储的边界初筛、切片借用及 FDT 本体物理区间的保留由 [`crate::arch::boot_data`] 负责。
 
 use super::{boot_memory::BootMemory, regions::Region};
 

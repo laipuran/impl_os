@@ -228,7 +228,7 @@ riscv_kernel_test_call_user:
 .globl riscv_kernel_test_user_first
 riscv_kernel_test_user_first:
     ecall
-    # 放置全 0 非法指令：若内核未显式更新 `sepc` 而直接顺序往下跑，将立即触发异常。
+    # 放置全 0 非法指令哨兵：若恢复路径错误地自动推进了 `sepc`（未保持原 `ecall` 地址则会落入此处），将立即触发非法指令异常并被测试断言拦截。
     .word 0
 .globl riscv_kernel_test_user_second
 riscv_kernel_test_user_second:

@@ -99,7 +99,9 @@ riscv_run_user:
     ld t0, RV_STATUS(t6)
     csrw sstatus, t0
     csrw sscratch, sp
-    # 将切换栈帧指针写入 `sscratch` 后，加载用户寄存器并执行 `sret` 降权进入 U-mode。
+    # 将切换栈帧指针写入 `sscratch`。注意：从下条指令起到 `sret` 完成前仍处于 S-mode，
+    # 但 `sscratch` 已非零（`entry.S` 会将此期间的 Trap 分流至用户分支），因此紧随其后的
+    # `RV_RESTORE_GPRS` 必须仅访问持续有效的 `TrapContext` 内存，绝不能在此过渡窗口内触发可恢复的访存异常。
     RV_RESTORE_GPRS
     sret
 .size riscv_run_user, .-riscv_run_user

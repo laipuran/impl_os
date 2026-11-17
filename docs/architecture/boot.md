@@ -24,9 +24,10 @@
 静态堆就绪后，`mm::init` 调用 `arch::boot::memory(boot_arg)` 提取平台原始的 RAM 与保留区间（`BootMemory`），再加上 `arch::boot::kernel_region()` 报告的内核镜像物理区间（`skernel..ekernel`），交由 `mm::regions::MemoryMap::new` 统一整理：
 
 - **裸指针与切片解析分离**：
-  - 架构层的 `arch::boot_data::MappedFdt::from_raw` 集中负责 `unsafe` 的裸地址校验：先验证 8 字节对齐与非空，读取 40 字节 FDT 头部获取总长度，确认不超过平台容量上限后再构造 `&[u8]` 切片，并记录 FDT 自身的物理区间。
-  - `mm::fdt::parse(&[u8])` 是纯安全的字节切片解析器，依据 [Devicetree Specification v0.4 第 5 章](https://github.com/devicetree-org/devicetree-specification/blob/v0.4/source/chapter5-flattened-format.rst) 解析 DTB v17（及向后兼容版本）。它会校验头部、块边界与重叠关系，提取所有启用的根级 `memory` 节点（`reg`）、内存保留表（reservation map）、`/reserved-memory` 下的静态保留区以及 `/chosen` 中的 `initrd` 范围。
-  - 若遇到动态保留区（仅指定 `size` 无 `reg`）、嵌套保留区、非空 `ranges`、不支持的 `#address-cells`/`#size-cells`（仅支持 1 或 2）或节点深度超过 32 层，解析器会直接报错并由内核 panic 停机，防止误将用途不明的物理内存当成空闲页分配。
+  - 平台启动协议及各架构早期启动代码（RISC-V 的 `satp = Bare` 物理直通模式、LoongArch 的 `DMW0` 直映窗口）必须保证 FDT 头部及声明的完整存储已映射、在借用期间持续有效可读且不被并发修改，并确保传入的物理地址与访问地址确实对应同一块物理内存。
+  - 架构层的 `arch::boot_data::MappedFdt::from_raw` 集中负责 `unsafe` 的裸地址边界与头部初筛：先验证物理地址 8 字节对齐及访问地址非空无溢出，读取 40 字节 FDT 头部校验魔数、版本兼容性与总长度（`totalsize`），确认不超过平台容量上限后借用构造 `&[u8]` 切片，并记录 FDT 自身的物理区间（数值检查本身不能替代平台对底层存储可读性的保证；完整块布局与内部节点结构由后续解析步骤校验）。
+  - `mm::fdt::parse(&[u8])` 是纯安全的字节切片解析器，依据 [Devicetree Specification v0.4 第 5 章](https://github.com/devicetree-org/devicetree-specification/blob/v0.4/source/chapter5-flattened-format.rst) 解析 DTB v17（及向后兼容版本）。它会校验头部声明的各数据块偏移与长度、对齐与边界及无重叠关系，提取所有启用的根级 `memory` 节点（`reg`）、内存保留表（reservation map）、`/reserved-memory` 下的静态保留区以及 `/chosen` 中的 `initrd` 范围。
+  - `/reserved-memory` 节点必须显式提供空的 `ranges` 属性，且其 `#address-cells` 与 `#size-cells` 必须与根节点完全一致。若遇到缺失或非空的 `ranges`、与根节点不一致或不支持的 `#address-cells`/`#size-cells`（仅支持 1 或 2）、动态保留区（仅指定 `size` 无 `reg`）、嵌套保留区或节点深度超过 32 层，解析器会直接报错并由内核 panic 停机，防止误将用途不明的物理内存当成空闲页分配。
 - **物理区间归一化（`MemoryMap`）**：
   - 分别对 RAM 区间和保留区间排序并合并重叠/相邻区间，随后从 RAM 中挖去所有保留区，并将剩余片段向内按 4 KiB 页边界对齐，生成 `usable` 可用页区间。
   - 若设备树未描述任何 RAM，或内核镜像（`skernel..ekernel`）未完整落在 RAM 区间内，内核直接拒绝启动。若扣除保留区并按页对齐后没有任何完整的可用页，`MemoryMap` 依然合法（`usable` 为空），此时页框分配器总容量为 0，后续 `alloc()` 返回 `None`。
@@ -47,7 +48,7 @@
 
 - **启动环境**：QEMU `virt` 平台 + OpenSBI，内核链接与加载基址均为 `0x80200000`。
 - **启动参数**：OpenSBI 通过 `a0` 传入 hart ID、`a1` 传入 FDT 物理地址。`entry.S` 仅放行 hart 0，将 `a1` 移入 `a0` 后调用 `kernel_main`。
-- **地址访问与关机**：当前处于 `satp = Bare` 物理直通模式，直接访问 `0x10000000` 的 NS16550A 串口与 FDT 物理地址。正常关机调用 SBI v0.2 System Reset 扩展（若固件不支持则回退到 `wfi` 死循环）。
+- **地址访问与关机**：当前处于 `satp = Bare` 物理直通模式，直接访问 `0x10000000` 的 NS16550A 串口与 FDT 物理地址。正常关机按 SBI v0.2+ 寄存器调用约定调用 SBI v0.3 引入的 System Reset（SRST）扩展（若固件不支持则回退到 `wfi` 死循环）。
 
 ### 3.2 LoongArch 64（`arch::loongarch64`）
 
@@ -66,12 +67,13 @@
 - `trap::init()`：安装异常入口向量，关闭全局中断以及浮点/向量扩展（RISC-V 清零 `sstatus` 的 `SIE`/`FS`/`VS`/`XS` 与 `sie`；LoongArch 清零 `CRMD.IE`、`ECFG` 与 `EUEN`），并初始化内核使用的暂存 CSR。
 - `TrapContext::user(entry, stack)`：创建初始用户态上下文，设置入口 PC、用户栈指针及用户特权级状态位。
 - `unsafe fn run_user(context: &mut TrapContext)`：在当前内核栈上保存被调用者保存寄存器，将 `context` 中的寄存器恢复到硬件并降权进入用户态（U-mode / PLV3）。每次进入前都会强制覆写特权状态位（不信任 `context` 中原有的特权位或扩展使能位）。当用户态发生任何异常或系统调用时，汇编将完整的用户整数现场写回同一个 `context`，恢复内核寄存器并直接返回给 `run_user` 的调用方。
+  - **执行与安全边界**：调用前须已完成 `trap::init` 初始化，保持单核、关中断且无嵌套的用户态切换；`context` 及所有内核态存储必须持续有效。正常执行用户程序时，调用方需保证用户入口 PC 与栈指针按 ABI 对齐且用户代码、栈及数据内存持续可访问（LoongArch 下若故意传入未映射地址以测试异常捕获，硬件触发的异常或 TLB refill 会保存现场并安全返回内核，不会自动填表或重试）。当前机制不建立用户页表、不提供内存隔离（RISC-V `satp = Bare` 与 LoongArch 测试用 `DMW1` 均无地址空间隔离），仅可运行受控测试探针，用户代码严禁修改任何内核代码、内核栈、静态数据、分配器状态或当前 `context`。
 
 | 维度 | RISC-V 64 (`riscv64`) | LoongArch 64 (`loongarch64`) |
 | --- | --- | --- |
 | **降权返回指令** | `sret`（S-mode ↔ U-mode） | `ertn`（PLV0 ↔ PLV3） |
 | **捕获的异常 CSR** | `sepc`、`sstatus`、`scause`、`stval` | `ERA`、`PRMD`、`ESTAT`、`BADV`（重填时为 `TLBR*`） |
-| **内核/用户 Trap 区分** | 内核态运行期间 `sscratch = 0`；进入用户态前将内核切换帧地址写入 `sscratch` | 检查 `PRMD.PPLV`（重填时检查 `TLBRPRMD.PPLV`）：若来自 PLV0 则在当前内核栈下推栈帧；若来自 PLV3 则先从 `SAVE2` 取出内核切换帧指针，再从该帧首槽读取 `TrapContext` 指针保存用户现场，随后从切换帧恢复内核态 |
+| **内核/用户 Trap 区分** | 正常内核态执行期间 `sscratch = 0`；进入用户态前在 `sret` 前的过渡窗口将内核切换帧地址写入 `sscratch`（该窗口内仍处 S-mode，要求 `TrapContext` 访存必不触发异常） | 检查 `PRMD.PPLV`（重填时检查 `TLBRPRMD.PPLV`）：若来自 PLV0 则在当前内核栈下推栈帧；若来自 PLV3 则先从 `SAVE2` 取出内核切换帧指针，再从该帧首槽读取 `TrapContext` 指针保存用户现场，随后从切换帧恢复内核态 |
 | **暂存 CSR 占用** | `sscratch` | `SAVE0`、`SAVE1`（入口暂存 `$t0`/`$sp`），`SAVE2`（切换帧指针），`SAVE3`（保存内核 `$tp`） |
 
 ### 内核态 Trap 与 LoongArch TLB Refill 说明

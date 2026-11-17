@@ -195,7 +195,7 @@ __loongarch_kernel_test_refill_load:
 .global __loongarch_kernel_test_user_first
 __loongarch_kernel_test_user_first:
     syscall 0
-    # 紧跟 `break 0`：若内核未显式更新 `ERA` 而意外顺序执行到此处，会触发非预期的断点异常。
+    # 紧跟 `break 0` 哨兵：若恢复路径错误地自动推进了 `ERA`（未保持原 `syscall` 地址则会跳过原指令落入此处），将立即触发断点并被测试断言拦截。
     break 0
 .global __loongarch_kernel_test_user_second
 __loongarch_kernel_test_user_second:

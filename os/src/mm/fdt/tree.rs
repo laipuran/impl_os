@@ -103,7 +103,7 @@ impl<'a> Tree<'a> {
         Ok(())
     }
 
-    /// 读取当前节点的所有属性，并返回紧随其后的首个非 `PROP` token（`BEGIN_NODE` 或 `END_NODE`）。
+    /// 读取当前节点的所有属性，并返回紧随其后的首个非 `PROP`、非 `NOP` token（后续 token 的语法合法性由调用者校验）。
     fn properties(&mut self, enabled: bool) -> Result<(Properties<'a>, u32), &'static str> {
         let mut properties = Properties::new(enabled);
         let mut names = Vec::new();

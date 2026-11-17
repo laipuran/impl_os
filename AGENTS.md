@@ -58,7 +58,14 @@
 
 ### 验证要求
 
-- 修改代码或注释后，运行 `just check`（格式检查 + 双架构默认与 `ktest` 配置的 Clippy）、`just test rv`、`just test la`，以及双架构 `cargo doc --no-deps`，修复所有编译、Clippy 或 rustdoc 警告。
+- 修改代码或注释后，运行 `just check`（格式检查 + 双架构默认与 `ktest` 配置的 Clippy）、`just test rv`、`just test la`，以及双架构 `cargo doc --no-deps`（含默认与 `ktest` 配置），修复所有编译、Clippy 或 rustdoc 警告：
+  ```bash
+  make prepare-vendor
+  for target in riscv64gc-unknown-none-elf loongarch64-unknown-none; do
+    cargo doc --config cargo/config.toml --locked --offline -p impl-os --target "$target" --no-deps
+    cargo doc --config cargo/config.toml --locked --offline -p impl-os --target "$target" --features ktest --no-deps
+  done
+  ```
 
 ## AI 相关文件与仓库卫生
 

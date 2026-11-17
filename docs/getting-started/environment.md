@@ -11,7 +11,7 @@
 
 1. 确保宿主机已安装 Docker（支持运行 `linux/amd64` 容器）及 VS Code 的 **Dev Containers** 扩展。
 2. 用 VS Code 打开仓库根目录，执行 **Dev Containers: Reopen in Container**。
-   - 首次拉取和解压基础镜像约需 6 GB 磁盘空间；若宿主机为 Apple Silicon 等 ARM 架构，Docker 会通过 `linux/amd64` 仿真运行。
+   - 首次拉取官方基础镜像的压缩下载量约为 6 GB，解压落地后基础镜像本身约占 26.8 GB 磁盘空间（含约 12 GiB 的其他架构交叉工具链）；请额外为本地开发镜像（`impl-os-dev`）及 `target/` 编译产物预留充足的磁盘空间。若宿主机为 Apple Silicon 等 ARM 架构，Docker 会通过 `linux/amd64` 仿真运行。
 3. 容器启动后会自动执行 `just doctor` 检查工具链与模拟器是否就绪。
 
 > **关于语言服务器：** 容器内配置了 `/home/dev/.cargo/bin/rust-analyzer`，通过 `rustup` 调用与 `nightly-2025-01-18` 配套的语言服务器，避免 VS Code 扩展自动下载的新版 `rust-analyzer` 与旧版 nightly 标准库产生兼容问题。`rust-analyzer` 与 `rust-src` 仅在构建开发镜像时安装，不写入 [`rust-toolchain.toml`](../../rust-toolchain.toml)，以免影响比赛评测构建。

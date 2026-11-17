@@ -8,6 +8,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 global_asm!(include_str!("probes.S"), run_user = sym abi_run_user);
 
 /// 为汇编 ABI 包装函数提供调用 [`run_user`] 的 `extern "C"` 垫片。
+///
+/// # Safety
+///
+/// - `context` 必须非空、按 [`TrapContext`] 要求对齐，且在调用期间指向有效、独占的上下文实例。
+/// - 调用方（`probes.S` 中的 `__loongarch_kernel_test_call_abi`）必须满足 [`run_user`] 的全部安全前提。
 unsafe extern "C" fn abi_run_user(context: *mut TrapContext) {
     // SAFETY: 仅由本模块的 `probes.S` 调用，传入独占的 `context` 且用户探针与栈已映射。
     unsafe { run_user(&mut *context) };

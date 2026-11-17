@@ -131,7 +131,7 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
             ),
             metadata,
         );
-        // 汇编探针从系统调用返回后会将 `a0` 移入 `a5`（第 6 个参数），以此验证用户态实际观测到了返回值。
+        // 前两次系统调用返回后，汇编探针会将 `a0` 移入下一次调用的 `a5`（第 6 个参数），以验证正返回值与负 errno 在用户态实际可见；第 3 次返回后直接触发末尾断点。
         args[5] = result as usize;
     }
     assert_completion_boundary(&mut context);

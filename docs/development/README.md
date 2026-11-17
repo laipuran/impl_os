@@ -14,11 +14,12 @@
 
 1. **添加或更新依赖**：
    - 先确认新依赖支持 `no_std`、兼容 `riscv64` 与 `loongarch64` 且许可证合规。
-   - 修改 `os/Cargo.toml` 后，在可联网的开发容器中执行：
+   - 修改 `os/Cargo.toml` 后，先在可联网的开发容器中按变更范围更新并审阅 `Cargo.lock`（例如执行 `cargo update -p <crate>` 或 `cargo metadata`），随后执行：
      ```bash
      just vendor
      ```
-   - `just vendor` 会运行 `cargo vendor --locked --versioned-dirs vendor`，并将每个依赖包下的隐藏文件 `.cargo-checksum.json` 重命名为非隐藏的 `cargo-checksum.json`，最后调用 `make prepare-vendor` 在本地建立同名软链接 `.cargo-checksum.json -> cargo-checksum.json`。
+   - `just vendor` 会运行 `cargo vendor --locked --versioned-dirs vendor`（注意 `--locked` 仅按现有 `Cargo.lock` 同步源码，不会自动升级锁文件；若 `Cargo.lock` 与 `Cargo.toml` 不一致会直接报错），并将每个依赖包下的隐藏文件 `.cargo-checksum.json` 重命名为非隐藏的 `cargo-checksum.json`，最后调用 `make prepare-vendor` 在本地建立同名软链接 `.cargo-checksum.json -> cargo-checksum.json`。
+   - 执行 `just vendor` 时 `vendor/` 目录必须可写，且更新期间请勿并发运行任何读取 `vendor/` 的编译、Clippy 或其他 vendor 更新任务。
    - 将更新后的 `os/Cargo.toml`、`Cargo.lock` 以及 `vendor/` 目录一并提交到 Git（符号链接 `.cargo-checksum.json` 被 `.gitignore` 忽略，无需提交）。
 
 2. **构建时自动恢复校验链接**：
@@ -28,5 +29,5 @@
 ## 合并与提交前检查清单
 
 1. **静态检查与自检**：在开发容器内执行 `just check`、`just test rv` 和 `just test la`，确认无格式问题、无 Clippy 警告且双架构自检全部通过。
-2. **评测构建验证**：在宿主机执行 `just judge-build`，确认在断网、清空 Cargo 缓存、过滤所有隐藏文件与目录的原始比赛镜像中，仍能成功生成 `kernel-rv` 与 `kernel-la`。
+2. **评测构建验证**：在宿主机执行 `just judge-build`，确认在断网、清空 Cargo 缓存、过滤所有隐藏文件与目录的原始比赛镜像中，仍能成功生成 `kernel-rv` 与 `kernel-la`；随后在容器内执行 `readelf -h kernel-rv kernel-la`，核验两个产物均为 `ELF64`，且 `Machine` 分别为 `RISC-V` 与 `LoongArch`。
 3. **仓库卫生检查**：检查 `git status` 与 `git diff --staged`，确保未误暂存测试镜像、临时日志、根目录编译出的 ELF 二进制或本地工具配置。

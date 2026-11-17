@@ -19,6 +19,12 @@ extern "C" {
     fn riscv_kernel_test_user_float();
 }
 
+/// 为汇编 ABI 包装函数提供调用 [`run_user`] 的 `extern "C"` 垫片。
+///
+/// # Safety
+///
+/// - 仅可由 `probes.S` 中的 `riscv_kernel_test_call_user` 在 [`super::init`] 完成后调用。
+/// - 调用时必须满足 [`run_user`] 的全部安全前提（单核关中断、`context` 独占有效、受控用户探针与私有测试栈可安全访问）。
 unsafe extern "C" fn run_user_shim(context: &mut TrapContext) {
     // SAFETY: 汇编探针仅在 `trap::init` 完成后，使用当前测试独占的 `context`、固定探针代码与私有测试栈调用本函数。
     unsafe { run_user(context) };

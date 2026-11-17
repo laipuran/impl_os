@@ -36,6 +36,12 @@ extern "C" fn kernel_main(boot_arg: usize) -> ! {
 }
 
 /// 清零链接脚本定义的 `[sbss, ebss)` 未初始化数据段。
+///
+/// # Safety
+///
+/// - 仅可在启动早期由主核在单核、关中断状态下调用一次。
+/// - 链接脚本导出的 `[sbss, ebss)` 在当前寻址模式下必须对应已映射、有效可写的内存区间，且当前正在使用的启动栈必须位于该区间之外。
+/// - 调用前及执行期间不得存在对 `[sbss, ebss)` 内任何 Rust 静态变量的存活引用或并发访问。
 unsafe fn clear_bss() {
     extern "C" {
         static mut sbss: u8;

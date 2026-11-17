@@ -15,7 +15,7 @@ just run la                   # 编译 release 版 LoongArch 内核并在 QEMU �
 MEM=128M SMP=1 just run rv    # 自定义 QEMU 内存大小与核心数
 ```
 
-- **输出文件注意**：debug 与 release 构建导出的根目录产物同名（均为 `kernel-rv` 和 `kernel-la`），请勿并发执行不同模式的导出构建。
+- **输出文件注意**：无论 `release` / `debug` 模式还是是否启用 `ktest` 等不同 feature，同一架构构建导出的根目录产物均同名（`kernel-rv` 和 `kernel-la`）。请勿并发执行同一架构的导出构建、`just run`、`just test` 或 `just debug`，以免覆盖或启动错误的内核 ELF。
 - **透传 QEMU 参数**：`just run <rv|la>` 和 `just debug <rv|la>` 之后追加的任意参数都会原样传给 QEMU（例如 `-initrd ...`）。
 - **退出方式**：RISC-V 运行结束后通过 OpenSBI 自动退出 QEMU；LoongArch 尚未实现关机，打印提示后进入 `idle` 等待，按 `Ctrl-a` 松开后再按 `x` 即可退出 QEMU。
 
@@ -29,7 +29,7 @@ just debug rv                 # RISC-V（监听容器内 :1234）
 just debug la                 # LoongArch（监听容器内 :1234）
 ```
 
-打开第二个容器终端，启动 `gdb-multiarch` 连接调试：
+在**同一个容器实例**中打开第二个终端，启动 `gdb-multiarch` 连接调试（VS Code Dev Containers 直接新建终端即可；若使用宿主机命令行工作流，请执行 `docker exec -it <容器名或ID> bash` 进入正在运行 QEMU 的那个容器，切勿再次执行 `just container` 启动新容器，否则独立的网络命名空间会导致 `:1234` 无法连通）：
 
 ```bash
 gdb-multiarch kernel-rv       # LoongArch 请改为 kernel-la

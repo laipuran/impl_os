@@ -35,7 +35,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ### 3.1 用户执行环境组（`user execution`）
 
-`user execution` 套件通过 `ktest::user_env::UserEnv` 准备一块 4 KiB 独占测试栈及临时用户态映射（RISC-V 利用 `satp = Bare` 下的固件 PMP；LoongArch 临时配置 `DMW1 = 0x18` 允许 PLV3 访问低地址 RAM，并在 `UserEnv` 销毁时清零 `DMW1` 及刷新 TLB），依次执行以下三项测试：
+`user execution` 套件通过 `ktest::user_env::UserEnv` 准备一块 4 KiB 独占测试栈及临时用户态映射（RISC-V 利用 `satp = Bare` 下的固件 PMP；LoongArch 临时配置 `DMW1 = 0x18` 允许 PLV3 访问低地址 RAM，并在 `UserEnv` 销毁时恢复进入环境前的 `DMW1` 原值及刷新 TLB），依次执行以下三项测试：
 
 1. **架构 Trap 与上下文切换测试（`arch::trap::tests`）**：
    - **异常原因解码**：验证中断与异常编号分离、未知编号保留；LoongArch 额外验证多位并发中断掩码、异常子码（`EsubCode`）以及软件重填标记（bit 63）优先于残留的 `ESTAT.Ecode`。
@@ -46,7 +46,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 2. **系统调用 ABI 测试（`syscall::tests`）**：
    - 用户态探针连续发起 3 次系统调用，覆盖超过 32 位的调用号、全 1 字、最高位置 1 及负数参数，确认 `syscall::decode` 完整提取 6 个参数且 `syscall::complete` 仅更新返回值寄存器（`a0`）并将 PC 前移 4 字节。
-   - 探针在每次系统调用返回后将 `a0` 拷贝到下一次调用的第 6 个参数（`a5`），证明用户态确实观测到了超过 32 位的正返回值与负 errno。
+   - 前两次系统调用返回后，探针将返回值寄存器 `a0` 拷贝到下一次调用的第 6 个参数（`a5`），证明用户态确实观测到了超过 32 位的正返回值与负 errno；第 3 次系统调用返回后直接触发末尾断点。
    - 验证非系统调用异常（如断点、S-mode/PLV0 系统调用、带残留 syscall 编码的 LoongArch TLB refill）会被 `decode` 和 `complete` 拒绝且不破坏原现场；验证当 `PC = usize::MAX - 3` 时，`complete` 能检测到 `PC + 4` 溢出并拒绝执行。
 
 3. **最小任务循环测试（`task::tests`）**：
@@ -113,3 +113,27 @@ just container timeout 5s qemu-system-riscv64 -machine virt -bios default -kerne
 ```
 
 预期串口应打印 `memory initialization failed` 与 `dynamic reserved-memory allocation is unsupported` 的 panic 信息并停机，不得出现 `booted on riscv64` 或 `all kernel tests passed`。
+
+### 4.3 注入致命内核态 Trap（验证诊断输出与停机）
+
+可恢复的内核断点探针不会覆盖 `trap::handle_kernel` 的致命异常 panic 分支。可在独立 debug QEMU 会话中通过 GDB 手动注入未处理的内核态异常（双架构通用，以下以 RISC-V 为例）：
+
+1. 终端 1 启动 `just debug rv`，终端 2 进入同一容器执行 `gdb-multiarch kernel-rv`。
+2. 在 GDB 中连接并断在 `trap::init` 之后，将当前指令指针篡改为非法的未对齐或未映射地址：
+   ```gdb
+   target remote :1234
+   break impl_os::mm::init
+   continue
+   set $pc = 0x2
+   continue
+   ```
+3. 预期串口打印形如 `kernel trap: <cause>: pc=..., status=..., raw_cause=..., bad_addr=..., sp=...` 的完整诊断信息，并调用 `arch::halt()` 原地挂起 CPU（严禁触发正常关机退出或输出后续启动成功日志）。
+
+### 4.4 注入 `Task::run` 系统调用 PC 溢出（验证故障收敛）
+
+白盒单元测试已直接验证 `syscall::complete` 对 `PC = usize::MAX - 3` 的溢出拒绝；若需进一步验证 `Task::run` 循环将该溢出收敛为 `ExitStatus::Faulted` 的集成路径，可在独立 debug 会话中注入：
+
+1. 先编译带 `ktest` 的 debug 内核并以调试模式启动（或在容器中运行带 `-S -s` 的 `ktest` 二进制），使用 `gdb-multiarch` 连接。
+2. 在 `os/src/task.rs` 的 `Task::run` 收到 `Outcome::Return`、即将调用 `syscall::complete(&mut self.context, result)` 行下断点。
+3. 命中断点后，在 GDB 中将该任务的保存 PC 改为 `usize::MAX - 3`（如 `set self.context.sepc = 0xfffffffffffffffc` 或 LoongArch 下 `set self.context.era = 0xfffffffffffffffc`），单步执行通过 `syscall::complete`。
+4. 确认 `syscall::complete` 返回 `false`、`Task::run` 立即跳出循环并将任务状态置为 `TaskState::Finished(ExitStatus::Faulted)`，且 `self.context` 中的 PC 与通用寄存器保持原样，绝不携带溢出地址再次调用 `run_user`。

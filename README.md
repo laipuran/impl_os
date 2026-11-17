@@ -61,5 +61,5 @@ just judge-build                 # 模拟评测机环境：使用原始比赛镜
 ## 构建与评测约定
 
 - **构建入口：** 评测机固定在仓库根目录执行 `make all`。直接运行不带 `--target` 的 `cargo build` 无法编译本内核。
-- **离线构建：** `make all` 使用 `--locked --offline` 并读取 `vendor/` 下的依赖源码，编译过程无需联网。如果新增或升级了依赖，需在开发环境运行 `just vendor` 并一并提交 `Cargo.toml`、`Cargo.lock` 和 `vendor/`（详见 [依赖维护说明](docs/development/README.md#维护离线依赖)）。
+- **离线构建：** `make all` 使用 `--locked --offline` 并读取 `vendor/` 下的依赖源码，编译过程无需联网。如果新增或升级了依赖，需在开发环境更新锁文件并运行 `just vendor`，再一并提交 `Cargo.toml`、`Cargo.lock` 和 `vendor/`（详见 [依赖维护说明](docs/development/README.md#维护离线依赖vendor)）。
 - **不依赖隐藏目录：** 评测平台可能过滤 `.cargo/`、`.vscode/` 等隐藏目录，因此链接脚本与编译参数统一由 `os/build.rs` 注入，Cargo 配置放在非隐藏的 `cargo/config.toml` 中。
