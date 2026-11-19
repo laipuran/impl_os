@@ -10,6 +10,7 @@
 - `src/mm/`：内存管理模块，包含基于静态 BSS 的伙伴系统堆（`heap`）、设备树内存解析（`fdt`）、物理地址区间整理（`regions`）以及基于位图的 4 KiB 物理页框分配器（`frame`）。
 - `src/trap.rs`：共享的内核态异常处理入口。用户态触发的 Trap 会直接从 `arch::trap::run_user` 返回给调用方，而内核态意外触发的 Trap 会在此打印现场并 panic 停机。
 - `src/syscall.rs` 与 `src/task.rs`：Linux 系统调用分发与最小任务执行循环。`Task` 封装单次同步的用户态执行上下文，目前支持 `exit`（93）和 `exit_group`（94），未实现的调用统一返回 `-ENOSYS`。
-- `src/ktest/`：由 `ktest` feature 启用的启动期白盒自检套件，覆盖 Trap 上下文切换、系统调用 ABI、任务生命周期、内核堆、设备树解析与物理页框分配。
+- `src/elf.rs` 与 `src/user_stack.rs`：纯安全解析不带程序解释器的用户态 ELF64 `ET_EXEC` 镜像、提取加载段描述，并在调用方提供的缓冲区中构造 Linux 64 位初始用户栈。
+- `src/ktest/`：由 `ktest` feature 启用的启动期白盒自检套件，覆盖 Trap 上下文切换、系统调用 ABI、任务生命周期、ELF64 解析、初始用户栈布局、内核堆、设备树解析与物理页框分配。
 
-当前内核尚未实现用户页表、地址空间隔离、ELF 加载器与多任务调度，具体架构设计见 [`docs/architecture/`](../docs/architecture/layout.md)。
+当前内核尚未实现用户页表、地址空间隔离、ELF 映射与运行接入及多任务调度，具体架构设计见 [`docs/architecture/`](../docs/architecture/layout.md)。
