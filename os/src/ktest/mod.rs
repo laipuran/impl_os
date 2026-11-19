@@ -21,6 +21,10 @@ const SUITES: &[Suite] = &[
         run: crate::elf::tests::kernel_test,
     },
     Suite {
+        name: "initial user stack",
+        run: crate::user_stack::tests::kernel_test,
+    },
+    Suite {
         name: "heap",
         run: crate::mm::heap::tests::kernel_test,
     },
