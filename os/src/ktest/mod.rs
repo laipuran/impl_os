@@ -17,6 +17,10 @@ const SUITES: &[Suite] = &[
         run: user_execution,
     },
     Suite {
+        name: "ELF64",
+        run: crate::elf::tests::kernel_test,
+    },
+    Suite {
         name: "heap",
         run: crate::mm::heap::tests::kernel_test,
     },

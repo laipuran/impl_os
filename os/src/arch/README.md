@@ -7,6 +7,7 @@
 `mod.rs` 对外导出以下统一接口：
 
 - 基础平台操作：`NAME`（架构名称字符串）、`putchar`（早期串口单字节输出）、`shutdown`（正常关机）、`halt`（死循环挂起当前核）。
+- ELF 架构约定：`ELF_MACHINE`（ELF 文件头机器号：RISC-V 为 `243` / `EM_RISCV`，LoongArch 为 `258` / `EM_LOONGARCH`）与 `ELF_ENTRY_ALIGN`（程序入口指令对齐字节数：RISC-V 为 `2`，LoongArch 为 `4`）。
 - 启动信息提取：`boot::memory(boot_arg)`（解析启动参数中的 RAM 与保留区）和 `boot::kernel_region()`（获取内核镜像占用的物理地址区间）。
 - 系统调用寄存器约定：`syscall::{NUMBER_REGISTER, ARGUMENT_START, is_syscall}`。
 - Trap 与特权级切换：`trap::{init, TrapContext, run_user}`。

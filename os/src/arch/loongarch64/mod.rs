@@ -10,6 +10,12 @@ pub(crate) mod trap;
 
 pub(crate) const NAME: &str = "loongarch64";
 
+/// ELF 文件头中 LoongArch 对应的机器号（`EM_LOONGARCH`）。
+pub(crate) const ELF_MACHINE: u16 = 258;
+
+/// LoongArch 采用定长 32 位指令，ELF 入口按 4 字节对齐。
+pub(crate) const ELF_ENTRY_ALIGN: usize = 4;
+
 pub(crate) fn putchar(byte: u8) {
     // 通过 `entry.S` 配置的 DMW0 窗口访问 QEMU `virt` 的 NS16550A 串口（物理地址 `0x1fe0_01e0`）。
     const UART: *mut u8 = 0x9000_0000_1fe0_01e0 as *mut u8;
