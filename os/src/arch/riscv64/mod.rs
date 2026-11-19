@@ -11,6 +11,12 @@ pub(crate) mod trap;
 
 pub(crate) const NAME: &str = "riscv64";
 
+/// ELF 文件头中 RISC-V 对应的机器号（`EM_RISCV`）。
+pub(crate) const ELF_MACHINE: u16 = 243;
+
+/// RV64GC 支持 16 位压缩指令（C 扩展），ELF 入口按 2 字节对齐。
+pub(crate) const ELF_ENTRY_ALIGN: usize = 2;
+
 pub(crate) fn putchar(byte: u8) {
     const UART: *mut u8 = 0x1000_0000 as *mut u8;
     // SAFETY: QEMU `virt` 在物理地址 `0x1000_0000` 处映射了 NS16550A 兼容 UART，

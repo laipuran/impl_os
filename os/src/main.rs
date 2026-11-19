@@ -9,6 +9,8 @@ extern crate alloc;
 
 mod arch;
 mod console;
+#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
+mod elf;
 #[cfg(feature = "ktest")]
 mod ktest;
 mod lang_items;
