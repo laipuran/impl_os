@@ -67,7 +67,7 @@ impl Task {
     ///
     /// - 调用时当前 CPU 必须已完成 [`crate::trap::init`] 初始化，保持单核、关中断且无嵌套的 `run_user` 调用。
     /// - 调用期间必须保持该任务对应的用户代码、栈及数据映射有效且处于激活状态，并满足 [`run_user`] 的对齐与内存隔离要求。
-    /// - 在接入用户页表隔离前，仅可用于执行受信任的测试代码，不得运行可能篡改内核内存的不可信程序。
+    /// - 裸地址模式或用户可见的直接映射仅可用于不会修改内核存储的可信探针。
     pub unsafe fn run(&mut self) -> ExitStatus {
         if let TaskState::Finished(status) = self.state {
             return status;

@@ -33,6 +33,11 @@ const SUITES: &[Suite] = &[
         name: "Sv39 paging",
         run: crate::arch::paging::tests::kernel_test,
     },
+    #[cfg(target_arch = "riscv64")]
+    Suite {
+        name: "user address space",
+        run: crate::arch::paging::user_space::tests::kernel_test,
+    },
     Suite {
         name: "FDT memory",
         run: crate::mm::fdt::tests::kernel_test,

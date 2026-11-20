@@ -11,6 +11,8 @@ use crate::mm::frame::{Frame, FrameAllocator, PAGE_SIZE};
 
 mod csr;
 mod pte;
+#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // ELF 加载器接入前由 ktest 构造。
+pub(crate) mod user_space;
 
 use pte::Entry;
 
@@ -84,7 +86,7 @@ pub struct PageTable<'a> {
     tables: Vec<Frame<'a>>,
 }
 
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 用户地址空间接入前由 ktest 使用。
+#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 正常启动尚不运行用户程序。
 impl<'a> PageTable<'a> {
     /// 分配并清零根页表；初始没有任何映射。
     ///
