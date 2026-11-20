@@ -10,7 +10,7 @@
 
 | 模块 | 路径 | 职责说明 |
 | --- | --- | --- |
-| `arch` | `os/src/arch/` | 按编译目标导出统一的平台接口：早期串口输出、关机/停机、ELF 机器号与入口对齐约定、启动参数与内存发现（`boot`）、Trap 上下文与用户态切换（`trap`）、Linux 系统调用寄存器约定（`syscall`）。RISC-V 另提供 Sv39 页表（`paging`）。详见 [`os/src/arch/README.md`](../../os/src/arch/README.md)。 |
+| `arch` | `os/src/arch/` | 按编译目标导出统一的平台接口：早期串口输出、关机/停机、ELF 机器号与入口对齐约定、启动参数与内存发现（`boot`）、Trap 上下文与用户态切换（`trap`）、Linux 系统调用寄存器约定（`syscall`）。RISC-V 另提供 Sv39 页表与最小用户地址空间（`paging`）。详见 [`os/src/arch/README.md`](../../os/src/arch/README.md)。 |
 | `mm` | `os/src/mm/` | 内存管理：初始化 1 MiB 静态伙伴系统堆（`heap`），解析设备树内存信息（`fdt`），对 RAM 与保留区排序、合并、扣除并按页对齐（`regions`），最终构建基于位图的 4 KiB 物理页框分配器（`frame`）。 |
 | `trap` | `os/src/trap.rs` | 共享的内核态异常处理入口 `handle_kernel`。用户态 Trap 直接从 `arch::trap::run_user` 返回给调用者；内核态未预期 Trap 则在此打印现场并 panic。 |
 | `syscall` | `os/src/syscall.rs` | Linux 系统调用解码、分发与返回写回。目前已接入 `exit`（93）和 `exit_group`（94），其余调用号返回 `-ENOSYS`（-38）。 |

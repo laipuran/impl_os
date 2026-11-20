@@ -83,9 +83,15 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 [QEMU 10.0.2](https://github.com/qemu/qemu/blob/v10.0.2/target/riscv/csr.c#L1918-L1941) 在有效的 `satp` 写入改变模式、ASID 或根页号时自动清空 TLB。上述用例验证映射结果和 `satp` 恢复；显式 `sfence.vma` 的回归验证需要在切换 `satp` 时保留缓存翻译的环境中另行执行。
 
-活动期间输出 `riscv64: Sv39 active`，通过后输出 `riscv64: Sv39 paging kernel tests passed`；整次自检仍以总成功标记为准。测试中的内核镜像使用监管态 RWX 临时映射，覆盖分页下的内核执行和固定用户探针，不代表最终内核权限布局，也不覆盖 LoongArch 页表、ELF 加载、通用用户地址空间、大页或多核失效。
+活动期间输出 `riscv64: Sv39 active`，通过后输出 `riscv64: Sv39 paging kernel tests passed`；整次自检仍以总成功标记为准。这组底层测试使用监管态 RWX 临时映射，覆盖分页下的内核执行和固定用户探针；分段权限由下一组覆盖。验证范围限于 RISC-V 的 4 KiB 页及单核地址转换。
 
-### 3.5 用户程序装载准备测试（`ELF64`、`initial user stack`）
+### 3.5 RISC-V 用户地址空间测试（`user address space`）
+
+`just test rv` 和 `just test rv debug` 在 `Sv39 paging` 之后运行此组。测试使用正式地址空间接口构造两个用户根，交替运行使用相同用户虚拟地址的固定探针，检查各自数据独立且跨轮保留。探针先验证未知系统调用返回 `-ENOSYS`，再访问用户数据和栈，最后调用 `exit`。
+
+测试同时检查内核分段与 UART 的监管态权限、非法及重复映射请求、用户读取内核代码/UART/表页、写代码页、访问栈保护页以及从数据页取指产生的故障。正常退出和故障终止后均检查 `satp` 恢复，地址空间销毁后检查页框全部回收。通过时输出 `riscv64: user address space kernel tests passed`；整次自检以总成功标记为准。范围限于单核、关中断和同步探针，LoongArch 用户分页及 ELF 映射与运行接入属于后续工作。
+
+### 3.6 用户程序装载准备测试（`ELF64`、`initial user stack`）
 
 - **`ELF64`**：使用手工编码的最小 RISC-V / LoongArch ELF64 镜像，验证双架构机器号匹配与跨架构拒绝、多加载段数据切片与页内偏移、跨页 BSS 清零范围、权限位、空段与纯 BSS 段处理、入口指令对齐差异（RISC-V 允许 2 字节、LoongArch 要求 4 字节），以及 `PT_PHDR` 的优先选择与非法声明（重复、晚于 `PT_LOAD`、尺寸不符、被 BSS 截断）。同时覆盖坏魔数、非 64 位/大端/非 `ET_EXEC`/`PT_INTERP`、`PN_XNUM`、偏移未对齐、文件越界、乱序段、仅在页级重叠的加载段以及向上取整至页边界时的地址溢出。
 - **`initial user stack`**：验证非对齐栈顶下的 64 位字布局（`argc`、`argv`/`envp` 指针与空终止符、`auxv` 顺序与 `(AT_NULL, 0)`）、用户虚拟地址换算、字符串内容、零填充对齐区与 16 字节对齐的最终 `sp`；覆盖恰好匹配与差 1 字节的边界容量、空列表与空字符串，以及基址下溢、内嵌 `\0` 和传入 `AT_NULL` 等错误路径，并确认失败时缓冲区保持原样、成功时不改动 `sp` 以下区域。
