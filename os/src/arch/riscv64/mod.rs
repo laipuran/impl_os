@@ -17,8 +17,10 @@ pub(crate) const ELF_MACHINE: u16 = 243;
 /// RV64GC 支持 16 位压缩指令（C 扩展），ELF 入口按 2 字节对齐。
 pub(crate) const ELF_ENTRY_ALIGN: usize = 2;
 
+const UART_BASE: usize = 0x1000_0000;
+
 pub(crate) fn putchar(byte: u8) {
-    const UART: *mut u8 = 0x1000_0000 as *mut u8;
+    const UART: *mut u8 = UART_BASE as *mut u8;
     // SAFETY: QEMU `virt` 在物理地址 `0x1000_0000` 处映射了 NS16550A 兼容 UART，
     // 正常启动以裸地址访问该设备；启用 Sv39 时，活动页表保留该地址的监管态 MMIO 映射。
     unsafe {

@@ -15,7 +15,7 @@
 ## 子模块说明
 
 - `riscv64/`：面向 QEMU `virt`（S-mode 启动），通过 OpenSBI 执行关机，直接用物理地址访问 16550 UART。
-- `riscv64/paging/`：`PageTable` 管理 Sv39 4 KiB 映射、软件查表、页表所有权和作用域激活；`pte.rs` 封装硬件编码，`csr.rs` 封装 `satp` 切换与 TLB 失效。分页接口仅由 RISC-V 导出。
+- `riscv64/paging/`：`PageTable` 管理 Sv39 4 KiB 映射、软件查表、页表所有权和作用域激活；`user_space.rs` 管理用户页和内核映射策略；`pte.rs` 封装硬件编码，`csr.rs` 封装 `satp` 切换与 TLB 失效。分页接口仅由 RISC-V 导出。
 - `loongarch64/`：面向 QEMU `virt` 直接加载 ELF 启动（PLV0），在入口汇编中配置 `DMW0`（`0x9000_0000_0000_0000`）高地址直接映射窗口，通过 QEMU 传入的 EFI 系统表定位设备树（FDT）与 initrd。
 - `boot_data.rs`：双架构共用的 FDT 原始内存借用封装 `MappedFdt`。负责将“从裸指针验证头部与容量上限并构造切片”的 `unsafe` 操作集中在一处，随后交由纯安全的 `mm::fdt` 解析，并自动将 FDT 自身占用的物理区间加入保留列表。
 
@@ -30,4 +30,4 @@
   - 用户态触发任何异常或系统调用时，汇编直接把用户寄存器写回调用方传入的 `TrapContext`，随后恢复内核被调用者保存寄存器并从 `run_user` 返回。
   - 内核态触发异常时，在当前内核栈上开辟对齐的 `TrapContext` 栈帧，调用 `crate::trap::handle_kernel`。
 
-调用方负责在切换前准备并激活用户映射；RISC-V 可单独启用 Sv39，正常启动保持裸地址模式。寄存器约定和安全前提见 [`docs/architecture/boot.md`](../../../docs/architecture/boot.md)。
+调用方负责在切换前准备并激活用户映射。RISC-V 可由 `UserAddressSpace` 准备映射并作用域激活 Sv39，用户 Trap 往返沿用活动根；正常启动保持裸地址模式。寄存器约定和安全前提见 [`docs/architecture/boot.md`](../../../docs/architecture/boot.md)。

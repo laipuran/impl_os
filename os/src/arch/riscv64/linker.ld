@@ -15,9 +15,11 @@ SECTIONS {
         *(.text .text.*)
     } :text
     .rodata : ALIGN(4K) {
+        srodata = .;
         *(.rodata .rodata.* .srodata .srodata.*)
     } :rodata
     .data : ALIGN(4K) {
+        sdata = .;
         PROVIDE(__global_pointer$ = . + 0x800);
         *(.data .data.* .sdata .sdata.*)
     } :data
