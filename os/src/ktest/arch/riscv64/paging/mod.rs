@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::arch::{asm, global_asm};
 
+use super::csr::satp;
 use super::{Error, PageTable, Permissions, Translation};
 use crate::arch::trap::{cause::ExceptionCause, cause::TrapCause, run_user, TrapContext};
 use crate::mm::{frame::FrameAllocator, frame::PAGE_SIZE, regions::MemoryMap, regions::Region};
@@ -182,13 +183,6 @@ fn allocation_rollback(frames: &FrameAllocator) {
             }
         });
     }
-}
-
-fn satp() -> usize {
-    let value;
-    // SAFETY: 自检在 S-mode 读取当前转换配置，不修改机器状态。
-    unsafe { asm!("csrr {}, satp", out(reg) value, options(nomem, nostack)) };
-    value
 }
 
 fn assert_user_fault(entry: usize, address: usize, cause: ExceptionCause) {
