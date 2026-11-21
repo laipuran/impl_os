@@ -18,11 +18,11 @@ const SUITES: &[Suite] = &[
     },
     Suite {
         name: "ELF64",
-        run: crate::elf::tests::kernel_test,
+        run: crate::task::elf::tests::kernel_test,
     },
     Suite {
         name: "initial user stack",
-        run: crate::user_stack::tests::kernel_test,
+        run: crate::task::user_stack::tests::kernel_test,
     },
     Suite {
         name: "heap",

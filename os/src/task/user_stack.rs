@@ -9,7 +9,7 @@
 //!                   argv[0], ..., argv[argc - 1], 0
 //!                   envp[0], ..., envp[n - 1], 0
 //!                   auxv[0] (key, value), ..., (AT_NULL, 0)
-//!                   零填充对齐区（0..15 字节）
+//!                   零填充对齐区（0 至 15 字节）
 //!                   argv / envp 字符串区（以 '\0' 结尾）
 //! stack_top    ──▶ （缓冲区末端，半开上界）
 //! ```
@@ -150,5 +150,5 @@ fn push_word(words: &mut &mut [u8], value: usize) {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "ktest/user_stack.rs"]
+#[path = "../ktest/user_stack.rs"]
 pub(crate) mod tests;

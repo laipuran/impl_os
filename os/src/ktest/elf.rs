@@ -85,7 +85,7 @@ fn check_load_plan(image: &[u8; IMAGE_SIZE]) {
 }
 
 fn check_optional_headers(image: &[u8; IMAGE_SIZE]) {
-    // 故意将首段文件大小缩短 1 字节，使程序头表末尾超出文件映射，验证 AT_PHDR 地址回退为 None。
+    // 缩短首段文件大小，使文件映射上界（0xaf）比程序头表上界（0xb0）少 1 字节，验证 ProgramHeaders::virtual_address 回退为 None。
     let mut partial = *image;
     put_u64(&mut partial, TEXT_PH + 32, 0x8f);
     put_u64(&mut partial, 24, 0x100a0);
