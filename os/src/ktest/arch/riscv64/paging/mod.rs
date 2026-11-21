@@ -17,7 +17,6 @@ extern "C" {
     static riscv_paging_user_end: u8;
 }
 
-const READ_WRITE: Permissions = Permissions(Permissions::READ.0 | Permissions::WRITE.0);
 const USER_CODE: usize = 0x1_0000;
 const USER_DATA: usize = 0x2_0000;
 const USER_STACK: usize = 0x3_0000;
@@ -26,7 +25,7 @@ const NESTED_PROBE: usize = 0x5_0000;
 
 fn new_table(frames: &FrameAllocator) -> PageTable<'_> {
     // SAFETY: 本套件只传入真实启动 RAM，或由存活的真实页框支撑的独占小池；
-    // 构建期间使用 bare，活动作用域另行保留全部表页的监管态同地址映射。
+    // 构建期间使用 Bare 模式，活动作用域另行保留全部表页的监管态同地址映射。
     unsafe { PageTable::new(frames) }.unwrap()
 }
 
@@ -36,7 +35,7 @@ fn mapping_and_recycling(frames: &FrameAllocator) {
         let mut table = new_table(frames);
         assert_eq!(frames.available(), available - 1);
         assert_eq!(table.translate(0), Err(Error::NotMapped));
-        // 覆盖同一 L0 表、L0/L1 分界，以及正负 canonical 地址边界。
+        // 覆盖同一 L0 表、L0/L1 分界，以及正负规范地址边界。
         let addresses = [
             0,
             PAGE_SIZE,
@@ -48,13 +47,15 @@ fn mapping_and_recycling(frames: &FrameAllocator) {
         ];
         for (index, address) in addresses.into_iter().enumerate() {
             let physical = index * PAGE_SIZE;
-            table.map(address, physical, READ_WRITE).unwrap();
+            table
+                .map(address, physical, Permissions::READ | Permissions::WRITE)
+                .unwrap();
             for offset in [0, 1, PAGE_SIZE - 1] {
                 assert_eq!(
                     table.translate(address + offset),
                     Ok(Translation {
                         physical_address: physical + offset,
-                        permissions: READ_WRITE,
+                        permissions: Permissions::READ | Permissions::WRITE,
                     }),
                 );
             }
@@ -89,17 +90,23 @@ fn invalid_inputs(frames: &FrameAllocator) {
     let available = frames.available();
     for address in [1 << 38, (1 << 39) - PAGE_SIZE, 1 << 63] {
         assert_eq!(
-            table.map(address, 0, READ_WRITE),
+            table.map(address, 0, Permissions::READ | Permissions::WRITE),
             Err(Error::InvalidVirtualAddress)
         );
         assert_eq!(table.unmap(address), Err(Error::InvalidVirtualAddress));
         assert_eq!(table.translate(address), Err(Error::InvalidVirtualAddress));
     }
-    assert_eq!(table.map(1, 0, READ_WRITE), Err(Error::UnalignedAddress));
-    assert_eq!(table.map(0, 1, READ_WRITE), Err(Error::UnalignedAddress));
+    assert_eq!(
+        table.map(1, 0, Permissions::READ | Permissions::WRITE),
+        Err(Error::UnalignedAddress)
+    );
+    assert_eq!(
+        table.map(0, 1, Permissions::READ | Permissions::WRITE),
+        Err(Error::UnalignedAddress)
+    );
     assert_eq!(table.unmap(1), Err(Error::UnalignedAddress));
     assert_eq!(
-        table.map(0, 1 << 56, READ_WRITE),
+        table.map(0, 1 << 56, Permissions::READ | Permissions::WRITE),
         Err(Error::InvalidPhysicalAddress)
     );
     for permissions in [
@@ -156,7 +163,10 @@ fn allocation_rollback(frames: &FrameAllocator) {
             let mut table = new_table(pool);
             let available = pool.available();
             if count < 3 {
-                assert_eq!(table.map(0, 0, READ_WRITE), Err(Error::OutOfMemory));
+                assert_eq!(
+                    table.map(0, 0, Permissions::READ | Permissions::WRITE),
+                    Err(Error::OutOfMemory)
+                );
                 assert_eq!(
                     pool.available(),
                     available,
@@ -164,17 +174,21 @@ fn allocation_rollback(frames: &FrameAllocator) {
                 );
                 assert_eq!(table.translate(0), Err(Error::NotMapped));
             } else {
-                table.map(0, 0, READ_WRITE).unwrap();
+                table
+                    .map(0, 0, Permissions::READ | Permissions::WRITE)
+                    .unwrap();
                 let after_map = pool.available();
                 assert_eq!(
-                    table.map(1 << 30, PAGE_SIZE, READ_WRITE),
+                    table.map(1 << 30, PAGE_SIZE, Permissions::READ | Permissions::WRITE),
                     Err(Error::OutOfMemory)
                 );
                 assert_eq!(pool.available(), after_map);
                 assert_eq!(table.translate(0).unwrap().physical_address, 0);
                 assert_eq!(table.translate(1 << 30), Err(Error::NotMapped));
                 // 已有两级表时不再申请页框。
-                table.map(PAGE_SIZE, PAGE_SIZE, READ_WRITE).unwrap();
+                table
+                    .map(PAGE_SIZE, PAGE_SIZE, Permissions::READ | Permissions::WRITE)
+                    .unwrap();
                 table.unmap(0).unwrap();
                 assert_eq!(pool.available(), after_map, "shared table freed too early");
                 table.unmap(PAGE_SIZE).unwrap();
@@ -208,10 +222,20 @@ fn map_kernel(table: &mut PageTable<'_>, kernel: Region) {
     for address in (start..end).step_by(PAGE_SIZE) {
         // 测试临时保留整个镜像，包括静态堆、启动栈和 trap；不是最终分段权限策略。
         table
-            .map(address, address, READ_WRITE | Permissions::EXECUTE)
+            .map(
+                address,
+                address,
+                Permissions::READ | Permissions::WRITE | Permissions::EXECUTE,
+            )
             .unwrap();
     }
-    table.map(0x1000_0000, 0x1000_0000, READ_WRITE).unwrap();
+    table
+        .map(
+            0x1000_0000,
+            0x1000_0000,
+            Permissions::READ | Permissions::WRITE,
+        )
+        .unwrap();
 }
 
 fn map_table_storage(tables: &mut [PageTable<'_>]) {
@@ -228,7 +252,9 @@ fn map_table_storage(tables: &mut [PageTable<'_>]) {
                 };
                 for table in &mut *tables {
                     if table.translate(address) == Err(Error::NotMapped) {
-                        table.map(address, address, READ_WRITE).unwrap();
+                        table
+                            .map(address, address, Permissions::READ | Permissions::WRITE)
+                            .unwrap();
                         changed = true;
                     }
                 }
@@ -251,7 +277,7 @@ fn hardware_translation(frames: &FrameAllocator) {
     let load = USER_CODE + core::ptr::addr_of!(riscv_paging_user_load) as usize - source;
     let store = USER_CODE + core::ptr::addr_of!(riscv_paging_user_store) as usize - source;
     assert!(end > source && end - source <= PAGE_SIZE);
-    // SAFETY: 三个句柄独占真实 RAM 页，bare 模式下可直接访问；源是只读探针，
+    // SAFETY: 三个句柄独占真实 RAM 页，Bare 模式下可直接访问；源是只读探针，
     // 与新分配页不重叠，复制长度已检查。页面在整个活动作用域内保持存活。
     unsafe {
         (code.start_address() as *mut u8).write_bytes(0, PAGE_SIZE);
@@ -280,14 +306,14 @@ fn hardware_translation(frames: &FrameAllocator) {
         .map(
             USER_DATA,
             data.start_address(),
-            READ_WRITE | Permissions::USER,
+            Permissions::READ | Permissions::WRITE | Permissions::USER,
         )
         .unwrap();
     table
         .map(
             USER_STACK,
             stack.start_address(),
-            READ_WRITE | Permissions::USER,
+            Permissions::READ | Permissions::WRITE | Permissions::USER,
         )
         .unwrap();
     map_table_storage(core::slice::from_mut(&mut table));
@@ -314,7 +340,7 @@ fn hardware_translation(frames: &FrameAllocator) {
         });
     }
     assert_eq!(satp(), 0, "previous satp was not restored");
-    // SAFETY: 已恢复 bare，独占页框仍存活；用户执行已经同步结束。
+    // SAFETY: 已恢复 Bare 模式，独占页框仍存活；用户执行已经同步结束。
     unsafe {
         assert_eq!((data.start_address() as *const usize).read(), 11);
         assert_eq!(
@@ -328,7 +354,7 @@ fn hardware_translation(frames: &FrameAllocator) {
         .map(
             USER_DATA,
             stack.start_address(),
-            READ_WRITE | Permissions::USER,
+            Permissions::READ | Permissions::WRITE | Permissions::USER,
         )
         .unwrap();
     // SAFETY: 与上文相同的内核及独占用户页映射；探针只读复用后的数据地址。
@@ -395,7 +421,7 @@ fn nested_activation(frames: &FrameAllocator) {
     assert_eq!(satp(), bare, "bare satp was not restored");
 }
 
-/// 验证 Sv39 软件映射及真实地址翻译，每轮返回前恢复 bare 并释放全部页框。
+/// 验证 Sv39 软件映射及真实地址翻译，每轮返回前恢复 Bare 模式并释放全部页框。
 pub fn kernel_test() {
     let frames = crate::mm::frames();
     let available = frames.available();
