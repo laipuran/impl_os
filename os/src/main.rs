@@ -9,8 +9,6 @@ extern crate alloc;
 
 mod arch;
 mod console;
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
-mod elf;
 #[cfg(feature = "ktest")]
 mod ktest;
 mod lang_items;
@@ -18,8 +16,6 @@ mod mm;
 mod syscall;
 mod task;
 mod trap;
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
-mod user_stack;
 mod utils;
 
 /// 架构汇编完成栈设置后跳转至此的共享 Rust 入口。

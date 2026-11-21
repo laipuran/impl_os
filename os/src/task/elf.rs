@@ -13,168 +13,6 @@ use thiserror::Error;
 
 use crate::{arch, mm::frame::PAGE_SIZE};
 
-const HEADER_SIZE: usize = 64;
-const ELFCLASS64: u8 = 2;
-const ELFDATA2LSB: u8 = 1;
-const EV_CURRENT: u8 = 1;
-const ET_EXEC: u16 = 2;
-const PN_XNUM: u16 = 0xffff;
-const PHENT_SIZE: usize = 56;
-const PT_LOAD: u32 = 1;
-const PT_INTERP: u32 = 3;
-const PT_PHDR: u32 = 6;
-const PF_X: u32 = 1;
-const PF_W: u32 = 2;
-const PF_R: u32 = 4;
-
-/// 解析或校验 ELF64 镜像失败的原因。
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum Error {
-    /// 镜像长度不足 64 字节，无法容纳完整的 ELF64 文件头。
-    #[error("truncated ELF64 header")]
-    TruncatedHeader,
-    /// 文件头前 4 字节不是 `\x7fELF` 魔数。
-    #[error("invalid ELF magic")]
-    BadMagic,
-    /// 文件类别不是 64 位（`ELFCLASS64`）。
-    #[error("unsupported ELF class")]
-    UnsupportedClass,
-    /// 字节序不是小端（`ELFDATA2LSB`）。
-    #[error("unsupported ELF byte order")]
-    UnsupportedEndian,
-    /// 标识字节或文件头中的 ELF 版本不是 `EV_CURRENT`。
-    #[error("unsupported ELF version")]
-    UnsupportedVersion,
-    /// 文件类型不是 `ET_EXEC`。
-    #[error("unsupported ELF file type")]
-    UnsupportedType,
-    /// 目标机器号（`e_machine`）与当前编译架构不匹配。
-    #[error("ELF machine does not match target architecture")]
-    WrongMachine,
-    /// 文件头声明的长度（`e_ehsize`）不等于 64 字节。
-    #[error("invalid ELF64 header size")]
-    InvalidHeaderSize,
-    /// 程序头表的偏移、对齐、条目大小或数量非法，或未完整落在镜像内。
-    #[error("invalid ELF program header table")]
-    InvalidProgramHeaders,
-    /// `PT_PHDR` 重复、出现在加载段之后、偏移/尺寸与表不符，或未被任何加载段文件数据完整覆盖。
-    #[error("invalid ELF PT_PHDR mapping")]
-    InvalidPhdrMapping,
-    /// 镜像包含 `PT_INTERP`，当前不支持动态链接器/程序解释器。
-    #[error("ELF program interpreters are unsupported")]
-    UnsupportedInterpreter,
-    /// 加载段的文件字节数（`p_filesz`）大于其内存字节数（`p_memsz`）。
-    #[error("ELF load segment file size exceeds memory size")]
-    FileLargerThanMemory,
-    /// 加载段不满足页内偏移同余，或 `p_align > 1` 时非 2 的幂/不满足同余约束。
-    #[error("invalid ELF load segment alignment")]
-    InvalidSegmentAlignment,
-    /// 加载段的文件数据区间发生溢出或超出镜像末尾。
-    #[error("ELF load segment exceeds file bounds")]
-    SegmentFileOutOfBounds,
-    /// 加载段的虚拟地址或向上取整至页边界的区间发生算术溢出。
-    #[error("ELF load segment virtual address overflows")]
-    SegmentAddressOverflow,
-    /// 非空加载段未按起始虚拟地址升序排列。
-    #[error("ELF load segments are not ordered by virtual address")]
-    UnsortedLoadSegments,
-    /// 相邻的非空加载段占用了重叠的 4 KiB 虚拟页。
-    #[error("ELF load segments occupy overlapping virtual pages")]
-    OverlappingLoadPages,
-    /// 程序入口未满足当前架构指令对齐要求，或未落在可执行加载段内。
-    #[error("ELF entry point is misaligned or outside executable load segments")]
-    InvalidEntry,
-}
-
-/// 程序头表的规格与映射位置。
-///
-/// 调用方可使用其中的信息填充 Linux 初始用户栈辅助向量中的
-/// `AT_PHDR`、`AT_PHENT` 与 `AT_PHNUM` 条目。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProgramHeaders {
-    /// 程序头表在原始镜像中的文件字节偏移（`e_phoff`）。
-    pub file_offset: usize,
-    /// 单条程序头的字节数（`e_phentsize`，固定为 56）。
-    pub entry_size: usize,
-    /// 程序头条目总数（`e_phnum`），包含不参与加载的条目。
-    pub count: usize,
-    /// 程序头表映射到用户态后的虚拟地址。
-    ///
-    /// 若镜像包含合法的 `PT_PHDR`，则采用其声明的地址；否则取首个文件数据完整覆盖
-    /// 程序头表的非空 `PT_LOAD` 段所对应的地址。若无加载段覆盖完整表，则为 `None`。
-    pub virtual_address: Option<usize>,
-}
-
-/// ELF 加载段请求的页面访问权限（对应 `p_flags` 中的 `PF_R`/`PF_W`/`PF_X`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Permissions {
-    /// 允许读取（`PF_R`）。
-    pub read: bool,
-    /// 允许写入（`PF_W`）。
-    pub write: bool,
-    /// 允许执行（`PF_X`）。
-    pub execute: bool,
-}
-
-/// 单个非空 `PT_LOAD` 段的装载描述。
-///
-/// 所有地址区间均表示用户虚拟地址的半开区间 `[start, end)`。
-/// 装载方在按 [`Self::pages`] 建立页表映射时，除了拷贝 [`Self::data`] 并清零
-/// [`Self::zero_fill`] 之外，还应确保首尾页内的对齐填充区域（`pages.start..memory.start`
-/// 与 `memory.end..pages.end`）均已清零，避免泄露残留的物理页内容。
-#[derive(Debug, PartialEq, Eq)]
-pub struct LoadSegment<'a> {
-    /// 段实际占用的虚拟内存字节区间（`[p_vaddr, p_vaddr + p_memsz)`），不含页对齐填充。
-    pub memory: Range<usize>,
-    /// 覆盖该段的完整 4 KiB 虚拟页区间，与其他加载段的 [`Self::pages`] 互不相交。
-    pub pages: Range<usize>,
-    /// 从原始镜像借用的待拷贝文件数据；纯 BSS 段为空切片。
-    pub data: &'a [u8],
-    /// 将 [`Self::data`] 写入 [`Self::pages`] 时相对 `pages.start` 的字节偏移。
-    pub data_offset: usize,
-    /// 紧随文件数据之后、必须清零的段内 BSS 虚拟地址区间；无 BSS 时为空区间。
-    pub zero_fill: Range<usize>,
-    /// 由 `PF_R`、`PF_W`、`PF_X` 解码得到的读、写、执行权限（不保留 `p_flags` 的其余标志位）；
-    /// 是否允许该权限组合由目标地址空间策略决定。
-    pub permissions: Permissions,
-}
-
-/// 已通过完整校验的 ELF64 镜像视图。
-///
-/// 借用原始镜像字节切片，按需构造装载描述，不持有额外堆内存。
-#[derive(Debug)]
-pub struct Elf<'a> {
-    image: &'a [u8],
-    entry: usize,
-    headers: ProgramHeaders,
-    table: &'a [u8],
-}
-
-impl<'a> Elf<'a> {
-    /// 返回程序入口点（`e_entry`）的用户虚拟地址。
-    pub fn entry(&self) -> usize {
-        self.entry
-    }
-
-    /// 返回程序头表的文件位置、条目规格及映射后的用户虚拟地址。
-    pub fn program_headers(&self) -> ProgramHeaders {
-        self.headers
-    }
-
-    /// 按起始虚拟地址升序遍历所有非空 `PT_LOAD` 段的装载描述。
-    ///
-    /// 自动跳过 `p_memsz == 0` 的空加载段，迭代过程不触发堆分配。
-    pub fn load_segments(&self) -> impl Iterator<Item = LoadSegment<'a>> + 'a {
-        let image = self.image;
-        self.table
-            .chunks_exact(PHENT_SIZE)
-            .filter(|ph| u32_at(ph, 0) == PT_LOAD)
-            .map(LoadHeader::read)
-            .filter(|load| load.memory_size != 0)
-            .map(move |load| load.segment(image))
-    }
-}
-
 /// 校验 ELF64 镜像并提取程序入口、程序头表元信息与加载段视图。
 ///
 /// 会完整检查文件头、程序头表边界、可选的 `PT_PHDR` 声明、所有 `PT_LOAD` 段的
@@ -310,6 +148,56 @@ pub fn parse(image: &[u8]) -> Result<Elf<'_>, Error> {
     })
 }
 
+const HEADER_SIZE: usize = 64;
+const ELFCLASS64: u8 = 2;
+const ELFDATA2LSB: u8 = 1;
+const EV_CURRENT: u8 = 1;
+const ET_EXEC: u16 = 2;
+const PN_XNUM: u16 = 0xffff;
+const PHENT_SIZE: usize = 56;
+const PT_LOAD: u32 = 1;
+const PT_INTERP: u32 = 3;
+const PT_PHDR: u32 = 6;
+const PF_X: u32 = 1;
+const PF_W: u32 = 2;
+const PF_R: u32 = 4;
+
+/// 已通过完整校验的 ELF64 镜像视图。
+///
+/// 借用原始镜像字节切片，按需构造装载描述，不持有额外堆内存。
+#[derive(Debug)]
+pub struct Elf<'a> {
+    image: &'a [u8],
+    entry: usize,
+    headers: ProgramHeaders,
+    table: &'a [u8],
+}
+
+impl<'a> Elf<'a> {
+    /// 返回程序入口点（`e_entry`）的用户虚拟地址。
+    pub fn entry(&self) -> usize {
+        self.entry
+    }
+
+    /// 返回程序头表的文件位置、条目规格及映射后的用户虚拟地址。
+    pub fn program_headers(&self) -> ProgramHeaders {
+        self.headers
+    }
+
+    /// 按起始虚拟地址升序遍历所有非空 `PT_LOAD` 段的装载描述。
+    ///
+    /// 自动跳过 `p_memsz == 0` 的空加载段，迭代过程不触发堆分配。
+    pub fn load_segments(&self) -> impl Iterator<Item = LoadSegment<'a>> + 'a {
+        let image = self.image;
+        self.table
+            .chunks_exact(PHENT_SIZE)
+            .filter(|ph| u32_at(ph, 0) == PT_LOAD)
+            .map(LoadHeader::read)
+            .filter(|load| load.memory_size != 0)
+            .map(move |load| load.segment(image))
+    }
+}
+
 struct LoadHeader {
     flags: u32,
     file_offset: usize,
@@ -401,6 +289,118 @@ fn field<const N: usize>(bytes: &[u8], offset: usize) -> [u8; N] {
     bytes[offset..offset + N].try_into().unwrap()
 }
 
+/// 解析或校验 ELF64 镜像失败的原因。
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum Error {
+    /// 镜像长度不足 64 字节，无法容纳完整的 ELF64 文件头。
+    #[error("truncated ELF64 header")]
+    TruncatedHeader,
+    /// 文件头前 4 字节不是 `\x7fELF` 魔数。
+    #[error("invalid ELF magic")]
+    BadMagic,
+    /// 文件类别不是 64 位（`ELFCLASS64`）。
+    #[error("unsupported ELF class")]
+    UnsupportedClass,
+    /// 字节序不是小端（`ELFDATA2LSB`）。
+    #[error("unsupported ELF byte order")]
+    UnsupportedEndian,
+    /// 标识字节或文件头中的 ELF 版本不是 `EV_CURRENT`。
+    #[error("unsupported ELF version")]
+    UnsupportedVersion,
+    /// 文件类型不是 `ET_EXEC`。
+    #[error("unsupported ELF file type")]
+    UnsupportedType,
+    /// 目标机器号（`e_machine`）与当前编译架构不匹配。
+    #[error("ELF machine does not match target architecture")]
+    WrongMachine,
+    /// 文件头声明的长度（`e_ehsize`）不等于 64 字节。
+    #[error("invalid ELF64 header size")]
+    InvalidHeaderSize,
+    /// 程序头表的偏移、对齐、条目大小或数量非法，或未完整落在镜像内。
+    #[error("invalid ELF program header table")]
+    InvalidProgramHeaders,
+    /// `PT_PHDR` 重复、出现在加载段之后、偏移/尺寸与表不符，或未被任何加载段文件数据完整覆盖。
+    #[error("invalid ELF PT_PHDR mapping")]
+    InvalidPhdrMapping,
+    /// 镜像包含 `PT_INTERP`，当前不支持动态链接器/程序解释器。
+    #[error("ELF program interpreters are unsupported")]
+    UnsupportedInterpreter,
+    /// 加载段的文件字节数（`p_filesz`）大于其内存字节数（`p_memsz`）。
+    #[error("ELF load segment file size exceeds memory size")]
+    FileLargerThanMemory,
+    /// 加载段不满足页内偏移同余，或 `p_align > 1` 时非 2 的幂/不满足同余约束。
+    #[error("invalid ELF load segment alignment")]
+    InvalidSegmentAlignment,
+    /// 加载段的文件数据区间发生溢出或超出镜像末尾。
+    #[error("ELF load segment exceeds file bounds")]
+    SegmentFileOutOfBounds,
+    /// 加载段的虚拟地址或向上取整至页边界的区间发生算术溢出。
+    #[error("ELF load segment virtual address overflows")]
+    SegmentAddressOverflow,
+    /// 非空加载段未按起始虚拟地址升序排列。
+    #[error("ELF load segments are not ordered by virtual address")]
+    UnsortedLoadSegments,
+    /// 相邻的非空加载段占用了重叠的 4 KiB 虚拟页。
+    #[error("ELF load segments occupy overlapping virtual pages")]
+    OverlappingLoadPages,
+    /// 程序入口未满足当前架构指令对齐要求，或未落在可执行加载段内。
+    #[error("ELF entry point is misaligned or outside executable load segments")]
+    InvalidEntry,
+}
+
+/// 程序头表的规格与映射位置。
+///
+/// 调用方可使用其中的信息填充 Linux 初始用户栈辅助向量中的
+/// `AT_PHDR`、`AT_PHENT` 与 `AT_PHNUM` 条目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramHeaders {
+    /// 程序头表在原始镜像中的文件字节偏移（`e_phoff`）。
+    pub file_offset: usize,
+    /// 单条程序头的字节数（`e_phentsize`，固定为 56）。
+    pub entry_size: usize,
+    /// 程序头条目总数（`e_phnum`），包含不参与加载的条目。
+    pub count: usize,
+    /// 程序头表映射到用户态后的虚拟地址。
+    ///
+    /// 若镜像包含合法的 `PT_PHDR`，则采用其声明的地址；否则取首个文件数据完整覆盖
+    /// 程序头表的非空 `PT_LOAD` 段所对应的地址。若无加载段覆盖完整表，则为 `None`。
+    pub virtual_address: Option<usize>,
+}
+
+/// ELF 加载段请求的页面访问权限（对应 `p_flags` 中的 `PF_R`/`PF_W`/`PF_X`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Permissions {
+    /// 允许读取（`PF_R`）。
+    pub read: bool,
+    /// 允许写入（`PF_W`）。
+    pub write: bool,
+    /// 允许执行（`PF_X`）。
+    pub execute: bool,
+}
+
+/// 单个非空 `PT_LOAD` 段的装载描述。
+///
+/// 所有地址区间均表示用户虚拟地址的半开区间 `[start, end)`。
+/// 装载方在按 [`Self::pages`] 建立页表映射时，除了拷贝 [`Self::data`] 并清零
+/// [`Self::zero_fill`] 之外，还应确保首尾页内的对齐填充区域（`pages.start..memory.start`
+/// 与 `memory.end..pages.end`）均已清零，避免泄露残留的物理页内容。
+#[derive(Debug, PartialEq, Eq)]
+pub struct LoadSegment<'a> {
+    /// 段实际占用的虚拟内存字节区间（`[p_vaddr, p_vaddr + p_memsz)`），不含页对齐填充。
+    pub memory: Range<usize>,
+    /// 覆盖该段的完整 4 KiB 虚拟页区间，与其他加载段的 [`Self::pages`] 互不相交。
+    pub pages: Range<usize>,
+    /// 从原始镜像借用的待拷贝文件数据；纯 BSS 段为空切片。
+    pub data: &'a [u8],
+    /// 将 [`Self::data`] 写入 [`Self::pages`] 时相对 `pages.start` 的字节偏移。
+    pub data_offset: usize,
+    /// 紧随文件数据之后、必须清零的段内 BSS 虚拟地址区间；无 BSS 时为空区间。
+    pub zero_fill: Range<usize>,
+    /// 由 `PF_R`、`PF_W`、`PF_X` 解码得到的读、写、执行权限（不保留 `p_flags` 的其余标志位）；
+    /// 是否允许该权限组合由目标地址空间策略决定。
+    pub permissions: Permissions,
+}
+
 #[cfg(feature = "ktest")]
-#[path = "ktest/elf.rs"]
+#[path = "../ktest/elf.rs"]
 pub(crate) mod tests;
