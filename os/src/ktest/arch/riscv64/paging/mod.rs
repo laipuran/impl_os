@@ -22,6 +22,7 @@ const USER_CODE: usize = 0x1_0000;
 const USER_DATA: usize = 0x2_0000;
 const USER_STACK: usize = 0x3_0000;
 const UNMAPPED: usize = 0x4_0000;
+const NESTED_PROBE: usize = 0x5_0000;
 
 fn new_table(frames: &FrameAllocator) -> PageTable<'_> {
     // SAFETY: 本套件只传入真实启动 RAM，或由存活的真实页框支撑的独占小池；
@@ -201,6 +202,44 @@ fn assert_user_fault(entry: usize, address: usize, cause: ExceptionCause) {
     assert_eq!(context.bad_addr(), address);
 }
 
+fn map_kernel(table: &mut PageTable<'_>, kernel: Region) {
+    let start = kernel.start & !(PAGE_SIZE - 1);
+    let end = (kernel.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    for address in (start..end).step_by(PAGE_SIZE) {
+        // 测试临时保留整个镜像，包括静态堆、启动栈和 trap；不是最终分段权限策略。
+        table
+            .map(address, address, READ_WRITE | Permissions::EXECUTE)
+            .unwrap();
+    }
+    table.map(0x1000_0000, 0x1000_0000, READ_WRITE).unwrap();
+}
+
+fn map_table_storage(tables: &mut [PageTable<'_>]) {
+    // 任一地址空间激活时，所有仍存活的表页都须能按物理地址访问。
+    // 建立恒等映射也可能分配表页，因此重复扫描直到一整轮不再新增映射。
+    loop {
+        let mut changed = false;
+        for owner in 0..tables.len() {
+            for index in 0..=tables[owner].tables.len() {
+                let address = if index == 0 {
+                    tables[owner].root.start_address()
+                } else {
+                    tables[owner].tables[index - 1].start_address()
+                };
+                for table in &mut *tables {
+                    if table.translate(address) == Err(Error::NotMapped) {
+                        table.map(address, address, READ_WRITE).unwrap();
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 fn hardware_translation(frames: &FrameAllocator) {
     assert_eq!(satp(), 0, "paging suite must start in bare mode");
     let mut table = new_table(frames);
@@ -229,15 +268,7 @@ fn hardware_translation(frames: &FrameAllocator) {
     }
 
     let kernel = crate::arch::boot::kernel_region().unwrap();
-    let start = kernel.start & !(PAGE_SIZE - 1);
-    let end = (kernel.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    for address in (start..end).step_by(PAGE_SIZE) {
-        // 测试临时保留整个镜像，包括静态堆、启动栈和 trap；不是最终分段权限策略。
-        table
-            .map(address, address, READ_WRITE | Permissions::EXECUTE)
-            .unwrap();
-    }
-    table.map(0x1000_0000, 0x1000_0000, READ_WRITE).unwrap();
+    map_kernel(&mut table, kernel);
     table
         .map(
             USER_CODE,
@@ -259,18 +290,7 @@ fn hardware_translation(frames: &FrameAllocator) {
             READ_WRITE | Permissions::USER,
         )
         .unwrap();
-    // 软件查表也需要同地址访问表页。映射这些页面本身可能创建新表，
-    // 因此迭代到全部自有表页都被覆盖；这些映射不向用户开放。
-    let mut mapped = 0;
-    while mapped <= table.tables.len() {
-        let address = if mapped == 0 {
-            table.root.start_address()
-        } else {
-            table.tables[mapped - 1].start_address()
-        };
-        table.map(address, address, READ_WRITE).unwrap();
-        mapped += 1;
-    }
+    map_table_storage(core::slice::from_mut(&mut table));
     let mut context = TrapContext::user(USER_CODE, USER_STACK + PAGE_SIZE);
     context.registers_mut()[10] = USER_DATA;
     let mut task = Task::new(context);
@@ -302,7 +322,7 @@ fn hardware_translation(frames: &FrameAllocator) {
             11
         );
     }
-    // 解除映射后复用同一虚拟地址，检查下次激活不会沿用先前的 TLB 翻译。
+    // 解除映射后复用同一虚拟地址，检查下次激活从新的物理页读值。
     table.unmap(USER_DATA).unwrap();
     table
         .map(
@@ -321,12 +341,58 @@ fn hardware_translation(frames: &FrameAllocator) {
                 context.cause(),
                 TrapCause::Exception(ExceptionCause::UserEnvironmentCall)
             );
-            assert_eq!(context.registers()[10], 0, "stale TLB mapping");
+            assert_eq!(context.registers()[10], 0, "remapped user data");
         });
     }
     assert_eq!(satp(), 0);
     // 先销毁所有映射，再允许用户页面的 Frame 句柄归还物理页。
     drop(table);
+}
+
+fn nested_activation(frames: &FrameAllocator) {
+    let bare = satp();
+    assert_eq!(bare, 0, "nested paging test must start in bare mode");
+    let data = [frames.alloc().unwrap(), frames.alloc().unwrap()];
+    let values = [0xa5, 0x5a];
+    let mut tables = [new_table(frames), new_table(frames)];
+    let kernel = crate::arch::boot::kernel_region().unwrap();
+    for ((table, frame), value) in tables.iter_mut().zip(&data).zip(values) {
+        let address = frame.start_address();
+        // SAFETY: Bare 模式下可直接写入这个仍由 frame 独占且按页对齐的真实 RAM 页。
+        unsafe { (address as *mut usize).write(value) };
+        map_kernel(table, kernel);
+        table.map(NESTED_PROBE, address, Permissions::READ).unwrap();
+    }
+    map_table_storage(&mut tables);
+    let [outer, inner] = &tables;
+
+    // SAFETY: 自检在主核 S-mode 关中断执行。两张表对内核镜像、UART 和双方的
+    // 表页保持相同映射，且在外层退出前一直存活。探针地址在两张表中均对齐、
+    // 只读，映射的独占页已初始化并保持存活；探针通过汇编访存，不形成 Rust 引用。
+    unsafe {
+        let read_probe = || {
+            let value: usize;
+            asm!(
+                "ld {value}, 0({address})",
+                value = out(reg) value,
+                address = in(reg) NESTED_PROBE,
+                options(readonly, nostack),
+            );
+            value
+        };
+        outer.with_active(|| {
+            let previous = satp();
+            assert_eq!(previous >> 60, 8);
+            assert_eq!(read_probe(), values[0], "outer probe before nesting");
+            inner.with_active(|| {
+                assert_ne!(satp(), previous, "inner page table was not activated");
+                assert_eq!(read_probe(), values[1], "inner probe");
+            });
+            assert_eq!(satp(), previous, "outer satp was not restored");
+            assert_eq!(read_probe(), values[0], "outer probe after nesting");
+        });
+    }
+    assert_eq!(satp(), bare, "bare satp was not restored");
 }
 
 /// 验证 Sv39 软件映射及真实地址翻译，每轮返回前恢复 bare 并释放全部页框。
@@ -337,6 +403,7 @@ pub fn kernel_test() {
     invalid_inputs(frames);
     allocation_rollback(frames);
     hardware_translation(frames);
+    nested_activation(frames);
     assert_eq!(frames.available(), available, "paging frames leaked");
     crate::println!("riscv64: Sv39 paging kernel tests passed");
 }
