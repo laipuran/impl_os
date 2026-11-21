@@ -21,7 +21,7 @@ impl Bitmap {
         free.try_reserve_exact(words)
             .map_err(|_| "insufficient heap for frame bitmap")?;
         free.resize(words, usize::MAX);
-        
+
         if total % WORD_BITS != 0 {
             free[words - 1] = (1usize << (total % WORD_BITS)) - 1;
         }
