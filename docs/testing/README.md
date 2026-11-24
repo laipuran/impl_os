@@ -14,7 +14,7 @@
 
 ## 2. 启动期内核自检框架（`ktest`）
 
-由于内核是禁用标准测试 harness（`test = false`）的裸机二进制，项目通过 Cargo 特性 `ktest` 提供统一的启动期自检入口（位于 [`os/src/ktest/mod.rs`](../../os/src/ktest/mod.rs)）：
+由于内核是禁用标准测试 harness（`test = false`）的裸机二进制，项目通过 Cargo 特性 `ktest` 提供统一的启动期自检入口（位于 [`os/src/ktest.rs`](../../os/src/ktest.rs)）：
 
 ```bash
 just test            # 默认运行 RISC-V (release) 自检
@@ -25,7 +25,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 ### 组织方式与设计约定
 
 - **启动入口**：`ktest` 仅在启用 `--features ktest` 时参与编译。日志、Trap 和内存分配器初始化后，启动入口调用无参数的 `ktest::run()`；需要真实页框的套件通过 `mm::frames()` 借用全局分配器。
-- **目录与白盒访问**：所有测试代码与专用汇编探针统一存放在 `os/src/ktest/` 下，按被测模块组织，再由被测模块通过 `#[cfg(feature = "ktest")] #[path = "..."] mod tests;` 挂载。这样既保持了业务源码目录的整洁，又允许测试直接访问模块内部私有项。
+- **目录与白盒访问**：各测试套件与专用汇编探针存放在 `os/src/ktest/` 下，按被测模块组织，再由被测模块通过 `#[cfg(feature = "ktest")] #[path = "..."] mod tests;` 挂载。这样既保持了业务源码目录的整洁，又允许测试直接访问模块内部私有项。
 - **顺序执行与状态恢复**：`ktest::run` 按 `SUITES` 数组顺序依次调用各套件的无参数、无返回值入口。每个套件在返回前必须恢复临时修改的硬件状态（如 LoongArch 的 `DMW1` 窗口）并归还借用的物理页框。任何断言失败都会直接触发内核 panic 并停机；只有全部套件通过才会打印最终的 `<arch>: all kernel tests passed`。
 - **注意 LoongArch 退出方式**：LoongArch 尚未实现主动关机，打印 `loongarch64: all kernel tests passed` 后会停在 `idle` 循环（需按 `Ctrl-a x` 退出）。判断自检是否通过必须以串口输出的成功标记为准，不能仅看 QEMU 是否退出。
 
@@ -72,7 +72,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ### 3.4 RISC-V Sv39 页表测试（`Sv39 paging`）
 
-`just test rv` 和 `just test rv debug` 在物理页框测试后执行此测试组。测试与前序 Trap 测试的机器状态无关，源码及探针位于 [`os/src/ktest/arch/riscv64/paging/`](../../os/src/ktest/arch/riscv64/paging/)。
+`just test rv` 和 `just test rv debug` 在物理页框测试后执行此测试组。测试与前序 Trap 测试的机器状态无关，测试代码位于 [`paging.rs`](../../os/src/ktest/arch/riscv64/paging.rs)，汇编探针位于 [`paging/probes.S`](../../os/src/ktest/arch/riscv64/paging/probes.S)。
 
 - 软件映射覆盖同表多页、2 MiB / 1 GiB 分界、Sv39 正负规范地址边界、页内偏移、物理地址零和 56 位上界，并验证拒绝非规范地址、未对齐地址、非法权限和重复映射。
 - 解除映射验证共享表保留、空中间表立即回收、重复解除返回错误，以及销毁非空页表后页框数恢复。

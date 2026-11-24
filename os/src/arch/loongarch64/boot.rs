@@ -80,5 +80,5 @@ fn mapped_address(physical: usize, size: usize) -> Result<usize, &'static str> {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../../ktest/boot/loongarch64/mod.rs"]
+#[path = "../../ktest/boot/loongarch64.rs"]
 pub(crate) mod tests;

@@ -222,5 +222,5 @@ unsafe fn init_zeroed_frame<R>(
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../ktest/mm/address_space/mod.rs"]
+#[path = "../ktest/mm/address_space.rs"]
 pub(crate) mod tests;

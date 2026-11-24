@@ -5,7 +5,7 @@ use core::arch::{asm, global_asm};
 use super::cause::{ExceptionCause, InterruptCause, TrapCause};
 use super::{run_user, TrapContext, DISABLED_STATUS, USER_STATUS};
 
-global_asm!(include_str!("probes.S"), run_user_shim = sym run_user_shim);
+global_asm!(include_str!("riscv64/probes.S"), run_user_shim = sym run_user_shim);
 
 extern "C" {
     fn riscv_kernel_test_kernel() -> usize;

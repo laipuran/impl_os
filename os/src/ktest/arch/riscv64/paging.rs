@@ -11,7 +11,7 @@ use crate::mm::frame::{FrameAllocator, PAGE_SIZE};
 use crate::mm::regions::Region;
 use crate::task::{ExitStatus, Task};
 
-global_asm!(include_str!("probes.S"));
+global_asm!(include_str!("paging/probes.S"));
 
 extern "C" {
     static riscv_paging_user_start: u8;

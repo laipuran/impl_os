@@ -341,5 +341,5 @@ unsafe fn allocate_table(frames: &FrameAllocator) -> Result<Frame<'_>, Error> {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../../../ktest/arch/riscv64/paging/mod.rs"]
+#[path = "../../ktest/arch/riscv64/paging.rs"]
 pub(crate) mod tests;

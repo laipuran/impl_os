@@ -114,5 +114,5 @@ impl Drop for Frame<'_> {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../ktest/mm/frame/mod.rs"]
+#[path = "../ktest/mm/frame.rs"]
 pub(crate) mod tests;

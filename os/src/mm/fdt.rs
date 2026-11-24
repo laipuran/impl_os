@@ -32,5 +32,5 @@ fn physical_region(start: u64, size: u64) -> Result<Region, &'static str> {
 }
 
 #[cfg(any(test, feature = "ktest"))]
-#[path = "../../ktest/mm/fdt/mod.rs"]
+#[path = "../ktest/mm/fdt.rs"]
 pub mod tests;
