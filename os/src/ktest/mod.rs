@@ -46,6 +46,11 @@ const SUITES: &[Suite] = &[
         name: "user address space",
         run: crate::mm::address_space::tests::kernel_test,
     },
+    #[cfg(target_arch = "riscv64")]
+    Suite {
+        name: "static ELF execution",
+        run: crate::task::loader::tests::kernel_test,
+    },
     Suite {
         name: "FDT memory",
         run: crate::mm::fdt::tests::kernel_test,

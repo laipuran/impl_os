@@ -98,6 +98,10 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ---
 
+### 3.7 RISC-V 静态 ELF 执行（`static ELF execution`）
+
+`just test rv` 通过装载器映射含用户探针的 ELF 字节，在 U-mode 检查初始栈对齐、参数与环境变量、`AT_ENTRY`、非页对齐的文件数据、页内填充和跨页 BSS，再以预期状态退出。测试同时检查 W+X、越界段和启动栈容量不足被拒绝，以及执行后 `satp` 恢复和页框回收。整次自检以总成功标记为准。
+
 ## 4. 手动检查与故障注入验证
 
 以下场景涉及观察不同内存配置下的启动日志或故意触发内核致命 panic，需在独立 QEMU 实例中手动执行（不纳入顺序运行的 `just test`）。
