@@ -8,6 +8,9 @@
 
 #[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
 pub(crate) mod elf;
+#[cfg(target_arch = "riscv64")]
+#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 启动入口接入前由自检调用。
+pub(crate) mod loader;
 #[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
 pub(crate) mod user_stack;
 

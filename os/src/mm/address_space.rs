@@ -17,6 +17,7 @@ const STACK_GUARD: usize = STACK_PAGE - PAGE_SIZE;
 pub(crate) enum Access {
     Read,
     ReadWrite,
+    Execute,
     ReadExecute,
 }
 
@@ -25,6 +26,7 @@ impl Access {
         match self {
             Self::Read => Permissions::READ,
             Self::ReadWrite => Permissions::READ | Permissions::WRITE,
+            Self::Execute => Permissions::EXECUTE,
             Self::ReadExecute => Permissions::READ | Permissions::EXECUTE,
         }
     }

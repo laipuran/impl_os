@@ -18,6 +18,7 @@
 | `task::elf` | `os/src/task/elf.rs` | 校验当前架构的 ELF64 可执行镜像，提供用户入口、程序头表元信息及借用原镜像数据的加载段描述。 |
 | `task::user_stack` | `os/src/task/user_stack.rs` | 在调用方提供的字节缓冲区中构造 Linux 64 位初始栈，返回 16 字节对齐的用户栈指针。 |
 | `mm::address_space` | `os/src/mm/address_space.rs` | 持有用户页表和用户页框，负责用户映射范围与作用域激活；当前使用 RISC-V 分页实现。 |
+| `task::loader` | `os/src/task/loader.rs` | 将静态 ELF 和启动栈装入独占地址空间，并绑定初始任务；当前由 RISC-V 自检使用。 |
 | `ktest` | `os/src/ktest/` | 启动期内核白盒自检框架（仅在启用 `ktest` feature 时参与编译），详见 [内核自检与测试验证](../testing/README.md)。 |
 
 ## 核心调用流
