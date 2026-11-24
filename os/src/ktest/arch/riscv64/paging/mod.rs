@@ -5,6 +5,7 @@ use core::arch::{asm, global_asm};
 
 use super::csr::satp;
 use super::{Error, PageTable, Permissions, Translation};
+use crate::arch::riscv64::UART_BASE;
 use crate::arch::trap::{cause::ExceptionCause, cause::TrapCause, run_user, TrapContext};
 use crate::mm::{frame::FrameAllocator, frame::PAGE_SIZE, regions::MemoryMap, regions::Region};
 use crate::task::{ExitStatus, Task};
@@ -224,11 +225,7 @@ fn map_kernel(table: &mut PageTable<'_>, kernel: Region) {
             .unwrap();
     }
     table
-        .map(
-            0x1000_0000,
-            0x1000_0000,
-            Permissions::READ | Permissions::WRITE,
-        )
+        .map(UART_BASE, UART_BASE, Permissions::READ | Permissions::WRITE)
         .unwrap();
 }
 

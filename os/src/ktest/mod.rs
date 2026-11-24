@@ -44,7 +44,7 @@ const SUITES: &[Suite] = &[
     #[cfg(target_arch = "riscv64")]
     Suite {
         name: "user address space",
-        run: crate::arch::paging::user_space::tests::kernel_test,
+        run: crate::mm::address_space::tests::kernel_test,
     },
     Suite {
         name: "FDT memory",
