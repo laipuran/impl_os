@@ -3,7 +3,7 @@
 use buddy_system_allocator::LockedHeap;
 
 #[cfg(feature = "ktest")]
-#[path = "../../ktest/mm/heap/mod.rs"]
+#[path = "../ktest/mm/heap.rs"]
 pub(crate) mod tests;
 
 const HEAP_SIZE: usize = 1024 * 1024;

@@ -5,7 +5,7 @@ use super::{run_user, TrapContext};
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-global_asm!(include_str!("probes.S"), run_user = sym abi_run_user);
+global_asm!(include_str!("loongarch64/probes.S"), run_user = sym abi_run_user);
 
 /// 为汇编 ABI 包装函数提供调用 [`run_user`] 的 `extern "C"` 垫片。
 ///

@@ -226,5 +226,5 @@ fn mapping_error(error: UserMappingError) -> Error {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../ktest/task/loader/mod.rs"]
+#[path = "../ktest/task/loader.rs"]
 pub(crate) mod tests;

@@ -44,8 +44,8 @@ const _: () = {
 };
 
 global_asm!(
-    include_str!("entry.S"),
-    include_str!("return.S"),
+    include_str!("./trap/entry.S"),
+    include_str!("./trap/return.S"),
     context_size = const core::mem::size_of::<TrapContext>(),
     gpr = const core::mem::offset_of!(TrapContext, gpr),
     word_size = const core::mem::size_of::<usize>(),
@@ -173,5 +173,5 @@ pub unsafe fn run_user(context: &mut TrapContext) {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../../../ktest/arch/riscv64/mod.rs"]
+#[path = "../../ktest/arch/riscv64.rs"]
 pub(crate) mod tests;

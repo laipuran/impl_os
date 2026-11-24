@@ -9,9 +9,9 @@ use crate::arch::trap::{
 };
 
 #[cfg(target_arch = "riscv64")]
-global_asm!(include_str!("riscv64.S"));
+global_asm!(include_str!("syscall/riscv64.S"));
 #[cfg(target_arch = "loongarch64")]
-global_asm!(include_str!("loongarch64.S"));
+global_asm!(include_str!("syscall/loongarch64.S"));
 
 extern "C" {
     fn syscall_test_entry();

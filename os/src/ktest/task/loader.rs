@@ -45,7 +45,7 @@ const _: () = {
 const POOL_CAPACITY: usize = 32;
 
 global_asm!(
-    include_str!("riscv64.S"),
+    include_str!("loader/riscv64.S"),
     argv_address = const ARGV_ADDRESS,
     envp_address = const ENVP_ADDRESS,
     at_entry = const user_stack::AT_ENTRY,

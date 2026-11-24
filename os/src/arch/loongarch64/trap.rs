@@ -112,8 +112,8 @@ const _: () = {
 };
 
 global_asm!(
-    include_str!("entry.S"),
-    include_str!("return.S"),
+    include_str!("./trap/entry.S"),
+    include_str!("./trap/return.S"),
     frame_size = const core::mem::size_of::<TrapContext>(),
     gpr = const core::mem::offset_of!(TrapContext, gpr),
     word = const core::mem::size_of::<usize>(),
@@ -185,5 +185,5 @@ extern "C" fn __loongarch_handle_kernel(context: &mut TrapContext) {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "../../../ktest/arch/loongarch64/mod.rs"]
+#[path = "../../ktest/arch/loongarch64.rs"]
 pub(crate) mod tests;

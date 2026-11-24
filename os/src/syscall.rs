@@ -75,5 +75,5 @@ pub fn dispatch(call: SyscallRequest) -> Outcome {
 }
 
 #[cfg(feature = "ktest")]
-#[path = "ktest/syscall/mod.rs"]
+#[path = "ktest/syscall.rs"]
 pub(crate) mod tests;

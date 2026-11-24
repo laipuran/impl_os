@@ -20,7 +20,7 @@ use crate::mm::{
 };
 use crate::task::{ExitStatus, Task};
 
-global_asm!(include_str!("riscv64.S"));
+global_asm!(include_str!("address_space/riscv64.S"));
 
 extern "C" {
     static riscv_user_space_start: u8;
