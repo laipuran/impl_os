@@ -10,7 +10,7 @@ use crate::mm::frame::{Frame, FrameAllocator, PAGE_SIZE};
 mod csr;
 mod pte;
 #[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 构造。
-pub(crate) mod user_space;
+pub(crate) mod sv39_user_root;
 
 use pte::Entry;
 
@@ -96,7 +96,8 @@ impl<'a> PageTable<'a> {
     ///
     /// - 仅在关闭中断的启动主核上使用。
     /// - `frames` 必须管理真实且独占的可用 RAM，不能是合成记账区间。
-    /// - 在整个页表生命周期内，从 `frames` 获得的每个页表页都必须能以非空物理地址作为内核指针读写，且不与其他存活对象重叠。
+    /// - 从 `frames` 获得的页表页须与其他存活对象不重叠，并在构建、软件查表及修改时能通过非空物理地址作为内核指针访问。
+    /// - 使用 [`Self::with_active`] 暂时改变地址转换时，调用方须遵守其对软件查表的额外要求。
     /// - 页表页不得通过其他别名被修改或暴露为用户可写页面。
     pub unsafe fn new(frames: &'a FrameAllocator) -> Result<Self, Error> {
         // SAFETY: 调用者保证此分配器提供可直接访问的独占物理 RAM。
@@ -201,8 +202,9 @@ impl<'a> PageTable<'a> {
     /// # Safety
     ///
     /// - 必须在关闭中断的启动主核 S-mode 调用，且硬件支持 Sv39。
-    /// - 新旧映射必须保持当前执行代码、栈、Rust 对象、Trap 入口及其依赖地址有效且指向同一存储，UART 等使用中的 MMIO 也须可访问。
+    /// - 新旧映射必须保持当前执行代码、监管态栈（含 Trap 现场）、Rust 对象、Trap 入口及其依赖地址有效且指向同一存储，UART 等使用中的 MMIO 也须可访问。
     /// - 新映射必须满足 Rust 别名规则，不允许用户修改内核或页表存储；所有叶子页和原页表必须在整个作用域内有效。
+    /// - 硬件按物理地址遍历页表。若闭包执行软件查表或修改其他页表，涉及的表页须在当前地址转换下仍可通过同地址内核指针访问。
     /// - 允许在闭包内按后进先出顺序嵌套调用 [`Self::with_active`]，但不得绕过该接口直接修改 `satp`、修改活动表项或启用并发。
     /// - 闭包中的裸地址访问和用户执行仍须分别满足各自的安全要求。
     pub unsafe fn with_active<R>(&self, run: impl FnOnce() -> R) -> R {
@@ -260,7 +262,8 @@ impl<'a> PageTable<'a> {
     // table 仅来自自有根页、沿自有表项的遍历或尚未发布的独占新页；index < 512。
     fn read_entry(&self, table: usize, index: usize) -> Entry {
         debug_assert!(index < 512);
-        // SAFETY: 上述私有遍历不变量保证地址有效；new 保证同地址内核访问。
+        // SAFETY: 私有遍历不变量保证页表页和索引有效；new 与 with_active
+        // 保证软件读表时可通过同地址内核指针访问。
         // 活动期间不修改表页，叶子 A/D 已置位，不依赖硬件写回。
         unsafe { (table as *const Entry).add(index).read() }
     }

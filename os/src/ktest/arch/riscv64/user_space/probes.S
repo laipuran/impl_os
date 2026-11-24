@@ -5,7 +5,9 @@
     .option norelax
     .global riscv_user_space_start
     .global riscv_user_space_load
+    .global riscv_user_space_read_byte
     .global riscv_user_space_store
+    .global riscv_user_space_code_byte
     .global riscv_user_space_end
 riscv_user_space_start:
     # 未知系统调用正常返回后，继续在同一地址访问本任务的数据和栈。
@@ -26,8 +28,15 @@ riscv_user_space_start:
 riscv_user_space_load:
     ld a0, 0(a0)
     unimp
+riscv_user_space_read_byte:
+    lbu a0, 0(a0)
+    li a7, 93
+    ecall
+    unimp
 riscv_user_space_store:
     sd zero, 0(a0)
     unimp
+riscv_user_space_code_byte:
+    .byte 0x5a
 riscv_user_space_end:
     .option pop

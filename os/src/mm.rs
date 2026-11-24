@@ -1,10 +1,34 @@
 //! 内存管理子系统：静态内核堆、启动期物理内存发现与物理页框分配器。
 
 pub(crate) mod boot_memory;
+// 用户页表后端目前仅在 RISC-V 实现；装载策略本身不依赖 ISA。
+#[cfg(target_arch = "riscv64")]
+#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 启动入口接入前由自检调用。
+pub(crate) mod address_space;
 pub(crate) mod fdt;
 pub(crate) mod frame;
 pub(crate) mod heap;
 pub(crate) mod regions;
+
+/// 用户地址空间的构建、映射或激活失败。
+///
+/// 地址空间与分页后端共用此分类；硬件页表的错误由后端转换。
+#[cfg(target_arch = "riscv64")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UserMappingError {
+    /// 用户地址未对齐或超出允许的映射范围。
+    InvalidUserAddress,
+    /// 初始内容放不进目标页。
+    InitialDataTooLarge,
+    /// 目标页已有映射。
+    AlreadyMapped,
+    /// 当前寻址模式不支持此操作。
+    UnavailableInCurrentMode,
+    /// 地址或权限不符合底层映射要求。
+    InvalidMapping,
+    /// 无法分配页框或映射元数据。
+    OutOfMemory,
+}
 
 // 仅 init 写入一次，此后不移动或替换分配器；所有访问限于关闭中断的启动主核。
 // 分配器包含 RefCell；启用中断或多核前必须重新设计访问保护。

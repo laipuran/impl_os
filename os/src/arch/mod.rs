@@ -2,10 +2,11 @@ pub(crate) mod boot_data;
 
 #[cfg(target_arch = "riscv64")]
 mod riscv64;
-// 接入装载流程前仅由 ktest 使用此导出。
-#[cfg(target_arch = "riscv64")]
-#[cfg_attr(not(feature = "ktest"), allow(unused_imports))]
+// 底层分页自检直接检查 Sv39 页表和 CSR。
+#[cfg(all(target_arch = "riscv64", feature = "ktest"))]
 pub(crate) use riscv64::paging;
+#[cfg(target_arch = "riscv64")]
+pub(crate) mod user_paging;
 #[cfg(target_arch = "riscv64")]
 pub(crate) use riscv64::{
     boot, halt, putchar, shutdown, syscall, trap, ELF_ENTRY_ALIGN, ELF_MACHINE, NAME,
