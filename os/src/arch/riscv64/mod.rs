@@ -17,7 +17,7 @@ pub(crate) const ELF_MACHINE: u16 = 243;
 /// RV64GC 支持 16 位压缩指令（C 扩展），ELF 入口按 2 字节对齐。
 pub(crate) const ELF_ENTRY_ALIGN: usize = 2;
 
-const UART_BASE: usize = 0x1000_0000;
+pub(crate) const UART_BASE: usize = 0x1000_0000;
 
 pub(crate) fn putchar(byte: u8) {
     const UART: *mut u8 = UART_BASE as *mut u8;

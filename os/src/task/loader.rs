@@ -2,11 +2,7 @@
 
 use crate::{
     arch::trap::TrapContext,
-    mm::{
-        address_space::{Access, AddressSpace},
-        frame::PAGE_SIZE,
-        UserMappingError,
-    },
+    mm::{self, address_space::AddressSpace, frame::PAGE_SIZE, Access, UserMappingError},
 };
 
 use super::{elf, user_stack, ExitStatus, Task};
@@ -18,15 +14,15 @@ pub(crate) enum Error {
     Elf(elf::Error),
     #[error("initial stack construction failed: {0}")]
     Stack(user_stack::Error),
-    #[error("user mapping failed: {0:?}")]
-    Memory(UserMappingError),
+    #[error("user mapping failed: {0}")]
+    Memory(#[from] UserMappingError),
     #[error("unsupported ELF segment permissions")]
     UnsupportedPermissions,
 }
 
 /// 同一次装载产生的用户地址空间和初始任务。
 pub(crate) struct LoadedProgram {
-    space: AddressSpace,
+    space: AddressSpace<'static>,
     task: Task,
 }
 
@@ -71,18 +67,13 @@ impl LoadedProgram {
         } else {
             auxv.len() - 1
         };
-        let mut stack = [0; PAGE_SIZE];
-        let sp = user_stack::build(
-            AddressSpace::STACK_TOP,
-            &mut stack,
-            argv,
-            envp,
-            &auxv[..count],
-        )
-        .map_err(Error::Stack)?;
-
-        // SAFETY: 调用方保证启动执行环境与页框分配器满足地址空间构建要求。
-        let mut space = unsafe { AddressSpace::new(&stack) }.map_err(Error::Memory)?;
+        // SAFETY: 调用方保证启动执行环境与全局分配器满足地址空间构建要求；栈构造回调只写页内缓冲区，不改变地址转换配置或开启并发。
+        let (mut space, sp) = unsafe {
+            AddressSpace::new_with_stack_in(mm::frames(), |stack| {
+                user_stack::build(AddressSpace::STACK_TOP, stack, argv, envp, &auxv[..count])
+                    .map_err(Error::Stack)
+            })
+        }?;
         for segment in elf.load_segments() {
             AddressSpace::check_range(segment.pages.start, segment.pages.end)
                 .map_err(Error::Memory)?;

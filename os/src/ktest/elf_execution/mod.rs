@@ -4,7 +4,7 @@ use core::{arch::global_asm, ptr, slice};
 
 use super::{Error, LoadedProgram};
 use crate::{
-    arch::{self, paging::sv39_user_root},
+    arch::{self, user_paging::is_user_inactive},
     mm::{self, address_space::AddressSpace, frame::PAGE_SIZE},
     task::{user_stack, ExitStatus},
 };
@@ -86,7 +86,7 @@ pub(crate) fn kernel_test() {
         // SAFETY: 自检在已安装 Trap 的启动主核上关中断执行，程序位于启动栈，
         // 探针只验证自身映射且通过 exit 返回。
         assert_eq!(unsafe { program.run() }, Ok(ExitStatus::Exited(42)));
-        assert_eq!(sv39_user_root::satp(), 0);
+        assert!(is_user_inactive());
     }
     assert_eq!(mm::frames().available(), before);
 
@@ -114,5 +114,5 @@ pub(crate) fn kernel_test() {
         Err(Error::Stack(user_stack::Error::InsufficientSpace))
     ));
     assert_eq!(mm::frames().available(), before);
-    assert_eq!(sv39_user_root::satp(), 0);
+    assert!(is_user_inactive());
 }

@@ -1,13 +1,14 @@
 //! 真实页框上的软件查表、失败回滚，以及临时启用 Sv39 的用户隔离探针。
 
-use alloc::vec::Vec;
 use core::arch::{asm, global_asm};
 
 use super::csr::satp;
 use super::{Error, PageTable, Permissions, Translation};
 use crate::arch::riscv64::UART_BASE;
 use crate::arch::trap::{cause::ExceptionCause, cause::TrapCause, run_user, TrapContext};
-use crate::mm::{frame::FrameAllocator, frame::PAGE_SIZE, regions::MemoryMap, regions::Region};
+use crate::ktest::support::frames::with_small_pool;
+use crate::mm::frame::{FrameAllocator, PAGE_SIZE};
+use crate::mm::regions::Region;
 use crate::task::{ExitStatus, Task};
 
 global_asm!(include_str!("probes.S"));
@@ -127,29 +128,6 @@ fn invalid_inputs(frames: &FrameAllocator) {
         table.translate(PAGE_SIZE - 1).unwrap().physical_address,
         (1 << 56) - 1
     );
-}
-
-fn with_small_pool(frames: &FrameAllocator, count: usize, run: impl FnOnce(&FrameAllocator)) {
-    let backing: Vec<_> = (0..count).map(|_| frames.alloc().unwrap()).collect();
-    let mut ram: Vec<_> = backing
-        .iter()
-        .map(|frame| Region {
-            start: frame.start_address(),
-            end: frame.start_address() + PAGE_SIZE,
-        })
-        .collect();
-    if ram.is_empty() {
-        // 有 RAM 但全被保留，构造合法的零容量池；不访问该合成地址。
-        ram.push(Region {
-            start: 0,
-            end: PAGE_SIZE,
-        });
-    }
-    let reserved = if count == 0 { ram.clone() } else { Vec::new() };
-    let pool = FrameAllocator::new(MemoryMap::new(ram, reserved, PAGE_SIZE).unwrap()).unwrap();
-    // backing 始终持有外层记录；只有小池访问这些页面，且先于 backing 销毁。
-    run(&pool);
-    assert_eq!(pool.available(), count);
 }
 
 fn allocation_rollback(frames: &FrameAllocator) {
