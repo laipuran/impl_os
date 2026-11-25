@@ -79,7 +79,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 - 从真实页框借出 0 至 4 页建立小池，验证根表及中间分支耗尽、部分分配回滚、已有映射保持不变，避免耗尽启动分配器。
 - 临时启用 Sv39，恒等映射内核镜像、页表页和 UART，另映射独占用户代码、数据和栈页。用户探针读写数据及栈后通过 `exit` 返回；未映射读取、用户读取监管态页面、写只读代码及从不可执行数据页取指产生对应的用户页故障。
 - 返回后检查原 `satp` 和用户数据；将同一虚拟地址重新映射到另一物理页后激活，验证探针读到新物理页的值。
-- 嵌套激活按 `Bare → A → B → A → Bare` 切换，同一探针虚拟地址在 A、B 中映射到不同物理页。检查进入 B 前后的实际读值，以及退出 B 后完整 `satp` 与进入前一致；退出 A 后恢复 Bare。整组结束时页框数恢复。
+- 嵌套激活按 `Bare → A → B → A → Bare` 切换，同一探针虚拟地址在 A、B 中映射到不同物理页。检查进入 B 前后的实际读值，以及退出 B 后完整 `satp` 与进入前一致；退出 A 后恢复 Bare。另通过受控预期值验证 `satp` 回读不匹配时返回 `ActivationFailed`、跳过闭包并恢复原 `satp`。整组结束时页框数恢复。
 
 [QEMU 10.0.2](https://github.com/qemu/qemu/blob/v10.0.2/target/riscv/csr.c#L1918-L1941) 在有效的 `satp` 写入改变模式、ASID 或根页号时自动清空 TLB。上述用例验证映射结果和 `satp` 恢复；显式 `sfence.vma` 的回归验证需要在切换 `satp` 时保留缓存翻译的环境中另行执行。
 
@@ -87,20 +87,33 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ### 3.5 RISC-V 用户地址空间测试（`user address space`）
 
-`just test rv` 和 `just test rv debug` 在 `Sv39 paging` 之后运行此组。测试使用正式地址空间接口构造两个用户根，交替运行使用相同用户虚拟地址的固定探针，检查各自数据独立且跨轮保留。探针先验证未知系统调用返回 `-ENOSYS`，再访问用户数据和栈，最后调用 `exit`。
+`just test rv` 和 `just test rv debug` 在 `Sv39 paging` 之后运行此组，源码与探针位于 [`os/src/ktest/mm/address_space/`](../../os/src/ktest/mm/address_space/)。
+测试使用正式地址空间接口构造两个用户根，交替运行使用相同用户虚拟地址的固定探针，检查各自数据独立且跨轮保留。
+探针先验证未知系统调用返回 `-ENOSYS`，再访问用户数据和栈，最后调用 `exit`。
 
-测试检查内核分段与 UART 的监管态权限、用户代码/数据/栈页的 `RXU`/`RWU` 权限和不同地址空间的独立页框。用户态探针验证代码页可读，以及仅在一侧映射的普通用户页在另一侧触发缺页。测试还检查非法及重复映射、用户读取内核代码/UART/根表、写代码页、访问栈保护页和从数据页取指产生的故障。软件查表在 Bare 下确认根表与中间表页均未建立同地址映射。正常退出与故障终止后均检查 `satp` 恢复、执行期间未增加页框占用，销毁地址空间后检查页框全部回收。通过时输出 `riscv64: user address space kernel tests passed`；整次自检以总成功标记为准。范围限于 RISC-V 单核、关中断和同步探针。
+测试检查内核分段与 UART 的监管态权限、用户代码/数据/栈页的 `RXU`/`RWU` 权限和不同地址空间的独立页框。
+用户态探针验证代码页可读、仅可执行（`XU`）页可取指但读取触发 `LoadPageFault`、只读（`RU`）页可读但写入和取指分别触发 `StoreAmoPageFault` 与 `InstructionPageFault`，以及仅在一侧映射的普通用户页在另一侧触发缺页。
+测试还检查未对齐地址查重、非法及重复映射（含零空闲页框小池下重复映射仍返回 `AlreadyMapped` 且原映射不变）、活动态下调用 `AddressSpace::new`/`map_page`/嵌套 `with_active`/`init_zeroed_frame` 均返回 `UnavailableInCurrentMode` 且外层映射不受影响、用户读取内核代码/UART/根表、写代码页、访问栈保护页和从数据页取指产生的故障。
+软件查表在 Bare 下确认根表与中间表页均未建立同地址映射。
+正常退出与故障终止后均检查恢复未激活状态（`is_user_inactive()`）且执行前后空闲页框数一致，销毁地址空间后检查页框全部回收。
+通过时输出 `riscv64: user address space kernel tests passed`；整次自检以总成功标记为准。
+范围限于 RISC-V 单核、关中断和同步探针。
 
 ### 3.6 用户程序装载准备测试（`ELF64`、`initial user stack`）
 
-- **`ELF64`**：使用手工编码的最小 RISC-V / LoongArch ELF64 镜像，验证双架构机器号匹配与跨架构拒绝、多加载段数据切片与页内偏移、跨页 BSS 清零范围、权限位、空段与纯 BSS 段处理、入口指令对齐差异（RISC-V 允许 2 字节、LoongArch 要求 4 字节），以及 `PT_PHDR` 的优先选择与非法声明（重复、晚于 `PT_LOAD`、尺寸不符、被 BSS 截断）。同时覆盖坏魔数、非 64 位/大端/非 `ET_EXEC`/`PT_INTERP`、`PN_XNUM`、偏移未对齐、文件越界、乱序段、仅在页级重叠的加载段以及向上取整至页边界时的地址溢出。
+- **`ELF64`**：使用 [`os/src/ktest/support/elf.rs`](../../os/src/ktest/support/elf.rs) 编码的最小 RISC-V / LoongArch ELF64 镜像，验证双架构机器号匹配与跨架构拒绝、多加载段数据切片与页内偏移、跨页 BSS 清零范围、权限位、空段与纯 BSS 段处理、入口指令对齐差异（RISC-V 允许 2 字节、LoongArch 要求 4 字节）。
+  同时验证 `PT_PHDR` 的优先选择、跳过仅 `PF_X` 不可读副本与非法声明（重复、晚于 `PT_LOAD`、尺寸不符、被 BSS 截断、显式指向不可读段），以及坏魔数、非 64 位/大端/非 `ET_EXEC`/`PT_INTERP`、`PN_XNUM`、偏移未对齐、文件越界、乱序段、仅在页级重叠的加载段与页边界地址溢出。
 - **`initial user stack`**：验证非对齐栈顶下的 64 位字布局（`argc`、`argv`/`envp` 指针与空终止符、`auxv` 顺序与 `(AT_NULL, 0)`）、用户虚拟地址换算、字符串内容、零填充对齐区与 16 字节对齐的最终 `sp`；覆盖恰好匹配与差 1 字节的边界容量、空列表与空字符串，以及基址下溢、内嵌 `\0` 和传入 `AT_NULL` 等错误路径，并确认失败时缓冲区保持原样、成功时不改动 `sp` 以下区域。
-
----
 
 ### 3.7 RISC-V 静态 ELF 执行（`static ELF execution`）
 
-`just test rv` 通过装载器映射含用户探针的 ELF 字节，在 U-mode 检查初始栈对齐、参数与环境变量、`AT_ENTRY`、非页对齐的文件数据、页内填充和跨页 BSS，再以预期状态退出。测试同时检查 W+X、越界段和启动栈容量不足被拒绝，以及执行后 `satp` 恢复和页框回收。整次自检以总成功标记为准。
+`just test rv` 与 `just test rv debug` 运行此组，源码与探针位于 [`os/src/ktest/task/loader/`](../../os/src/ktest/task/loader/)。
+测试在预先填充非零脏字节（`0xa5`）的小页框池上装载含用户探针的 ELF 镜像，在 U-mode 验证初始栈 16 字节对齐、以奇地址 `argv[0]` 逐字节 `lbu` 核对完整 `argv`/`envp` 及空终止符、按键扫描 `auxv` 核对 `AT_ENTRY`/`AT_PAGESZ` 与成组程序头项。
+同时覆盖可读（实测 U-mode 读取 `AT_PHDR` 程序头）、仅 `PF_X` 与未覆盖三种程序头表布局，并验证跨页文件数据、页首/BSS/页尾全清零及数据段可写性。
+测试还按 `0..needed` 逐容量小池验证中途 OOM 回滚与全部页框回收，以及 W+X 权限、越界段和启动栈容量不足被拒绝，执行前后均核验恢复未激活状态与页框完全回收。
+整次自检以总成功标记为准。
+
+---
 
 ## 4. 手动检查与故障注入验证
 

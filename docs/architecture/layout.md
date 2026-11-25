@@ -10,8 +10,8 @@
 
 | 模块 | 路径 | 职责说明 |
 | --- | --- | --- |
-| `arch` | `os/src/arch/` | 按编译目标导出统一的平台接口：早期串口输出、关机/停机、ELF 机器号与入口对齐约定、启动参数与内存发现（`boot`）、Trap 上下文与用户态切换（`trap`）、Linux 系统调用寄存器约定（`syscall`）。RISC-V 另提供 Sv39 页表和激活机制（`paging`）。详见 [`os/src/arch/README.md`](../../os/src/arch/README.md)。 |
-| `mm` | `os/src/mm/` | 内存管理：初始化 1 MiB 静态伙伴系统堆（`heap`），解析设备树内存信息（`fdt`），对 RAM 与保留区排序、合并、扣除并按页对齐（`regions`），最终构建基于位图的 4 KiB 物理页框分配器（`frame`）。 |
+| `arch` | `os/src/arch/` | 按编译目标导出统一的平台接口：早期串口输出、关机/停机、ELF 机器号与入口对齐约定、启动参数与内存发现（`boot`）、Trap 上下文与用户态切换（`trap`）、Linux 系统调用寄存器约定（`syscall`）。RISC-V 另经 `user_paging` 提供用户分页后端，底层 `paging` 仅在 RISC-V `ktest` 配置下重导出供白盒分页自检使用。详见 [`os/src/arch/README.md`](../../os/src/arch/README.md)。 |
+| `mm` | `os/src/mm/` | 内存管理：初始化 1 MiB 静态伙伴系统堆（`heap`），解析设备树内存信息（`fdt`），对 RAM 与保留区排序、合并、扣除并按页对齐（`regions`），构建基于位图的 4 KiB 物理页框分配器（`frame`），并在 RISC-V 上提供用户地址空间（`address_space`）。 |
 | `trap` | `os/src/trap.rs` | 共享的内核态异常处理入口 `handle_kernel`。用户态 Trap 直接从 `arch::trap::run_user` 返回给调用者；内核态未预期 Trap 则在此打印现场并 panic。 |
 | `syscall` | `os/src/syscall.rs` | Linux 系统调用解码、分发与返回写回。目前已接入 `exit`（93）和 `exit_group`（94），其余调用号返回 `-ENOSYS`（-38）。 |
 | `task` | `os/src/task.rs` | 最小用户任务封装 `Task`。持有一个 `TrapContext`，在当前内核栈上同步循环调用 `run_user` 执行用户态代码，直至任务调用 `exit` 或触发未处理异常。 |
