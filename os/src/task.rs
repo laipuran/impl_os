@@ -4,14 +4,12 @@
 //! 暂不持有独立的内核栈或用户地址空间。调用方需先准备好用户代码与栈映射，
 //! 再调用 [`Task::run`] 同步执行用户程序，直到任务调用 `exit` 或触发未处理异常。
 //!
-//! [`elf`] 和 [`user_stack`] 分别解析用户程序镜像、构造初始用户栈，不建立映射。
+//! [`elf`] 和 [`user_stack`] 分别解析用户程序镜像、构造初始用户栈，不建立映射；
+//! RISC-V 上由 `loader` 串联解析、初始栈构造、用户地址空间映射与任务运行。
 
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
 pub(crate) mod elf;
 #[cfg(target_arch = "riscv64")]
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 启动入口接入前由自检调用。
 pub(crate) mod loader;
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 调用。
 pub(crate) mod user_stack;
 
 use crate::arch::trap::{run_user, TrapContext};
@@ -45,9 +43,12 @@ pub struct Task {
     state: TaskState,
 }
 
-#[allow(dead_code)] // 接入装载流程前，暂由 ktest 直接构造并运行用户任务。
 impl Task {
     /// 使用给定的初始用户态上下文创建处于 [`TaskState::Ready`] 状态的任务。
+    #[cfg_attr(
+        all(target_arch = "loongarch64", not(feature = "ktest")),
+        expect(dead_code, reason = "LoongArch 正常启动尚不创建用户任务")
+    )]
     pub fn new(context: TrapContext) -> Self {
         Self {
             context,
@@ -56,11 +57,13 @@ impl Task {
     }
 
     /// 返回任务的当前生命周期状态。
+    #[cfg(feature = "ktest")]
     pub fn state(&self) -> TaskState {
         self.state
     }
 
     /// 返回任务当前的寄存器与异常上下文引用（含退出或故障时刻的现场）。
+    #[cfg(feature = "ktest")]
     pub fn context(&self) -> &TrapContext {
         &self.context
     }
@@ -78,6 +81,10 @@ impl Task {
     /// - 调用时当前 CPU 必须已完成 [`crate::trap::init`] 初始化，保持单核、关中断且无嵌套的 `run_user` 调用。
     /// - 调用期间必须保持该任务对应的用户代码、栈及数据映射有效且处于激活状态，并满足 [`run_user`] 的对齐与内存隔离要求。
     /// - 裸地址模式或用户可见的直接映射仅可用于不会修改内核存储的可信探针。
+    #[cfg_attr(
+        all(target_arch = "loongarch64", not(feature = "ktest")),
+        expect(dead_code, reason = "LoongArch 正常启动尚不运行用户任务")
+    )]
     pub unsafe fn run(&mut self) -> ExitStatus {
         if let TaskState::Finished(status) = self.state {
             return status;
