@@ -314,21 +314,23 @@ fn hardware_translation(frames: &FrameAllocator) {
     // SAFETY: 内核镜像和 UART 保持同地址映射且 U=0；用户仅可访问独占代码、
     // 数据和栈页，所有帧在作用域内存活。测试不修改 satp 或启用中断。
     unsafe {
-        table.with_active(|| {
-            assert_eq!(satp() >> 60, 8);
-            // 同时验证活动映射下 UART 和软件查表可用。
-            crate::println!("riscv64: Sv39 active");
-            assert_eq!(
-                table.translate(USER_DATA).unwrap().physical_address,
-                data.start_address()
-            );
-            // SAFETY: 用户代码仅修改私有数据和栈，然后通过 exit 返回。
-            assert_eq!(task.run(), ExitStatus::Exited(11));
-            assert_user_fault(load, UNMAPPED, ExceptionCause::LoadPageFault);
-            assert_user_fault(load, kernel.start, ExceptionCause::LoadPageFault);
-            assert_user_fault(store, USER_CODE, ExceptionCause::StoreAmoPageFault);
-            assert_user_fault(USER_DATA, USER_DATA, ExceptionCause::InstructionPageFault);
-        });
+        table
+            .with_active(|| {
+                assert_eq!(satp(), (8 << 60) | (table.root.start_address() >> 12));
+                // 同时验证活动映射下 UART 和软件查表可用。
+                crate::println!("riscv64: Sv39 active");
+                assert_eq!(
+                    table.translate(USER_DATA).unwrap().physical_address,
+                    data.start_address()
+                );
+                // SAFETY: 用户代码仅修改私有数据和栈，然后通过 exit 返回。
+                assert_eq!(task.run(), ExitStatus::Exited(11));
+                assert_user_fault(load, UNMAPPED, ExceptionCause::LoadPageFault);
+                assert_user_fault(load, kernel.start, ExceptionCause::LoadPageFault);
+                assert_user_fault(store, USER_CODE, ExceptionCause::StoreAmoPageFault);
+                assert_user_fault(USER_DATA, USER_DATA, ExceptionCause::InstructionPageFault);
+            })
+            .unwrap();
     }
     assert_eq!(satp(), 0, "previous satp was not restored");
     // SAFETY: 已恢复 Bare 模式，独占页框仍存活；用户执行已经同步结束。
@@ -350,16 +352,18 @@ fn hardware_translation(frames: &FrameAllocator) {
         .unwrap();
     // SAFETY: 与上文相同的内核及独占用户页映射；探针只读复用后的数据地址。
     unsafe {
-        table.with_active(|| {
-            let mut context = TrapContext::user(load, USER_STACK + PAGE_SIZE);
-            context.registers_mut()[10] = USER_DATA;
-            run_user(&mut context);
-            assert_eq!(
-                context.cause(),
-                TrapCause::Exception(ExceptionCause::UserEnvironmentCall)
-            );
-            assert_eq!(context.registers()[10], 0, "remapped user data");
-        });
+        table
+            .with_active(|| {
+                let mut context = TrapContext::user(load, USER_STACK + PAGE_SIZE);
+                context.registers_mut()[10] = USER_DATA;
+                run_user(&mut context);
+                assert_eq!(
+                    context.cause(),
+                    TrapCause::Exception(ExceptionCause::UserEnvironmentCall)
+                );
+                assert_eq!(context.registers()[10], 0, "remapped user data");
+            })
+            .unwrap();
     }
     assert_eq!(satp(), 0);
     // 先销毁所有映射，再允许用户页面的 Frame 句柄归还物理页。
@@ -383,6 +387,17 @@ fn nested_activation(frames: &FrameAllocator) {
     map_table_storage(&mut tables);
     let [outer, inner] = &tables;
 
+    // SAFETY: 目标表对内核镜像、启动栈和 UART 保持同地址映射；启动主核在 S-mode 关中断执行。
+    let rejected = unsafe {
+        outer.with_active_expecting::<()>(bare, || panic!("mismatched satp must not run"))
+    };
+    assert_eq!(rejected, Err(Error::ActivationFailed));
+    assert_eq!(
+        satp(),
+        bare,
+        "satp was not restored after readback mismatch"
+    );
+
     // SAFETY: 自检在主核 S-mode 关中断执行。两张表对内核镜像、UART 和双方的
     // 表页保持相同映射，且在外层退出前一直存活。探针地址在两张表中均对齐、
     // 只读，映射的独占页已初始化并保持存活；探针通过汇编访存，不形成 Rust 引用。
@@ -397,17 +412,21 @@ fn nested_activation(frames: &FrameAllocator) {
             );
             value
         };
-        outer.with_active(|| {
-            let previous = satp();
-            assert_eq!(previous >> 60, 8);
-            assert_eq!(read_probe(), values[0], "outer probe before nesting");
-            inner.with_active(|| {
-                assert_ne!(satp(), previous, "inner page table was not activated");
-                assert_eq!(read_probe(), values[1], "inner probe");
-            });
-            assert_eq!(satp(), previous, "outer satp was not restored");
-            assert_eq!(read_probe(), values[0], "outer probe after nesting");
-        });
+        outer
+            .with_active(|| {
+                let previous = satp();
+                assert_eq!(previous >> 60, 8);
+                assert_eq!(read_probe(), values[0], "outer probe before nesting");
+                inner
+                    .with_active(|| {
+                        assert_ne!(satp(), previous, "inner page table was not activated");
+                        assert_eq!(read_probe(), values[1], "inner probe");
+                    })
+                    .unwrap();
+                assert_eq!(satp(), previous, "outer satp was not restored");
+                assert_eq!(read_probe(), values[0], "outer probe after nesting");
+            })
+            .unwrap();
     }
     assert_eq!(satp(), bare, "bare satp was not restored");
 }

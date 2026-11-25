@@ -19,6 +19,7 @@ impl From<PagingError> for UserMappingError {
     fn from(error: PagingError) -> Self {
         match error {
             PagingError::AlreadyMapped => Self::AlreadyMapped,
+            PagingError::ActivationFailed => Self::UnavailableInCurrentMode,
             PagingError::OutOfMemory => Self::OutOfMemory,
             PagingError::InvalidVirtualAddress
             | PagingError::UnalignedAddress
@@ -99,7 +100,7 @@ impl Sv39UserRoot {
         // SAFETY: 内核镜像与 UART 保持同地址监管态映射；调用方在镜像内的启动栈
         // 上执行，保证 Trap 现场和闭包对象可访问，并且不会软件访问未映射的表页。
         // 自有用户页在闭包结束前保持有效，CPU 直接通过物理地址遍历表页。
-        Ok(unsafe { self.table.with_active(run) })
+        Ok(unsafe { self.table.with_active(run) }?)
     }
 
     #[cfg(feature = "ktest")]

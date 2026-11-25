@@ -61,6 +61,8 @@ pub enum Error {
     AlreadyMapped,
     /// 目标虚拟页没有映射。
     NotMapped,
+    /// `satp` 回读值与预期的 Sv39 配置不符。
+    ActivationFailed,
     /// 页框或页表所有权记录的堆空间不足。
     OutOfMemory,
 }
@@ -199,6 +201,10 @@ impl<'a> PageTable<'a> {
     ///
     /// 使用 ASID 0；共享借用阻止作用域内通过本接口修改或销毁活动页表。返回值不延长临时映射的有效期，不能借此返回依赖该映射的引用。
     ///
+    /// # Errors
+    ///
+    /// 若 `satp` 未接受预期的 Sv39 配置，恢复原值并返回 [`Error::ActivationFailed`]；不执行闭包。
+    ///
     /// # Safety
     ///
     /// - 必须在关闭中断的启动主核 S-mode 调用，且硬件支持 Sv39。
@@ -207,10 +213,24 @@ impl<'a> PageTable<'a> {
     /// - 硬件按物理地址遍历页表。若闭包执行软件查表或修改其他页表，涉及的表页须在当前地址转换下仍可通过同地址内核指针访问。
     /// - 允许在闭包内按后进先出顺序嵌套调用 [`Self::with_active`]，但不得绕过该接口直接修改 `satp`、修改活动表项或启用并发。
     /// - 闭包中的裸地址访问和用户执行仍须分别满足各自的安全要求。
-    pub unsafe fn with_active<R>(&self, run: impl FnOnce() -> R) -> R {
+    pub unsafe fn with_active<R>(&self, run: impl FnOnce() -> R) -> Result<R, Error> {
         // SAFETY: 调用者保证两次切换及闭包执行期间的映射和单核约束。
-        let _restore = unsafe { csr::RestoreSatp::switch(self.root.start_address()) };
-        run()
+        let _restore = unsafe { csr::RestoreSatp::switch(self.root.start_address()) }
+            .ok_or(Error::ActivationFailed)?;
+        Ok(run())
+    }
+
+    #[cfg(feature = "ktest")]
+    unsafe fn with_active_expecting<R>(
+        &self,
+        expected: usize,
+        run: impl FnOnce() -> R,
+    ) -> Result<R, Error> {
+        // SAFETY: 调用者须满足 [`Self::with_active`] 的全部安全前提。
+        let _restore =
+            unsafe { csr::RestoreSatp::switch_checked(self.root.start_address(), expected) }
+                .ok_or(Error::ActivationFailed)?;
+        Ok(run())
     }
 
     fn walk(&self, indices: [usize; 3]) -> Result<[usize; 3], Error> {
