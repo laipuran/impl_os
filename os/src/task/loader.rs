@@ -52,6 +52,10 @@ impl LoadedProgram<'static> {
     ///
     /// - 仅在关中断的启动主核特权态调用和使用，并满足 [`AddressSpace::new_with_stack_in`] 要求的当前架构执行环境前提。
     /// - 全局页框分配器必须已初始化，并提供可由当前架构内核指针独占读写的真实 RAM 页框。
+    #[cfg_attr(
+        not(feature = "ktest"),
+        expect(dead_code, reason = "正常启动尚不装载用户程序")
+    )]
     pub(crate) unsafe fn load(image: &[u8], argv: &[&[u8]], envp: &[&[u8]]) -> Result<Self, Error> {
         // SAFETY: 调用方保证启动执行环境及全局分配器满足装载要求。
         unsafe { Self::load_in(mm::frames(), image, argv, envp) }
@@ -101,6 +105,10 @@ impl<'a> LoadedProgram<'a> {
     /// - 当前须为关中断的启动主核特权态，满足 [`AddressSpace::with_active`] 与 [`Task::run`] 的全部硬件、Trap 初始化及无嵌套切换前提。
     /// - 内核栈（含 Trap 保存现场）须位于内核镜像的启动栈，本对象须在切换前后保持持续可访问。
     /// - 执行期间不得在其他路径改写地址转换配置、开启中断或并发。任务闭包只返回退出状态，不返回依赖临时活动映射的引用。
+    #[cfg_attr(
+        not(feature = "ktest"),
+        expect(dead_code, reason = "正常启动尚不运行用户程序")
+    )]
     pub(crate) unsafe fn run(&mut self) -> Result<ExitStatus, UserMappingError> {
         // SAFETY: 调用方保证当前执行环境、启动栈、Trap 现场和任务对象符合要求。任务循环不访问未映射的表页；入口和栈均由本地址空间映射。
         unsafe { self.space.with_active(|| self.task.run()) }

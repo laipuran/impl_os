@@ -21,14 +21,34 @@ const STACK_ALIGN: usize = 16;
 const AT_NULL: usize = 0;
 
 /// 辅助向量键：程序头表的用户虚拟地址。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+)]
 pub const AT_PHDR: usize = 3;
 /// 辅助向量键：单条程序头的字节数。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+)]
 pub const AT_PHENT: usize = 4;
 /// 辅助向量键：程序头条目总数。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+)]
 pub const AT_PHNUM: usize = 5;
 /// 辅助向量键：系统页面大小（字节）。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+)]
 pub const AT_PAGESZ: usize = 6;
 /// 辅助向量键：主程序入口的用户虚拟地址。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+)]
 pub const AT_ENTRY: usize = 9;
 
 /// 调用方提供的单条 ELF 辅助向量（`auxv`）记录。
@@ -75,6 +95,10 @@ pub enum Error {
 ///
 /// 当虚拟基址下溢、布局大小溢出、对齐后缓冲区容量不足，或输入包含内嵌 `\0` /
 /// 保留键 `AT_NULL` 时，返回对应的 [`Error`](enum@Error)。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 正常启动尚不构建初始用户栈")
+)]
 pub fn build(
     stack_top: usize,
     stack: &mut [u8],

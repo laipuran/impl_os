@@ -24,6 +24,10 @@ use crate::{arch, mm::frame::PAGE_SIZE};
 ///
 /// 当镜像截断、格式或架构不受支持、程序头表或 `PT_PHDR` 非法、加载段越界/溢出/乱序/
 /// 页重叠，或程序入口非法时，返回对应的 [`Error`](enum@Error)。
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+)]
 pub fn parse(image: &[u8]) -> Result<Elf<'_>, Error> {
     let header = image.get(..HEADER_SIZE).ok_or(Error::TruncatedHeader)?;
     if &header[..4] != b"\x7fELF" {
@@ -175,11 +179,19 @@ pub struct Elf<'a> {
 
 impl<'a> Elf<'a> {
     /// 返回程序入口点（`e_entry`）的用户虚拟地址。
+    #[cfg_attr(
+        all(target_arch = "loongarch64", not(feature = "ktest")),
+        expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+    )]
     pub fn entry(&self) -> usize {
         self.entry
     }
 
     /// 返回程序头表的文件位置、条目规格及映射后的用户虚拟地址。
+    #[cfg_attr(
+        all(target_arch = "loongarch64", not(feature = "ktest")),
+        expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+    )]
     pub fn program_headers(&self) -> ProgramHeaders {
         self.headers
     }
@@ -187,6 +199,10 @@ impl<'a> Elf<'a> {
     /// 按起始虚拟地址升序遍历所有非空 `PT_LOAD` 段的装载描述。
     ///
     /// 自动跳过 `p_memsz == 0` 的空加载段，迭代过程不触发堆分配。
+    #[cfg_attr(
+        all(target_arch = "loongarch64", not(feature = "ktest")),
+        expect(dead_code, reason = "LoongArch 尚未接入静态 ELF 装载器")
+    )]
     pub fn load_segments(&self) -> impl Iterator<Item = LoadSegment<'a>> + 'a {
         let image = self.image;
         self.table
