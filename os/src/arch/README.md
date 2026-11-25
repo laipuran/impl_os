@@ -11,12 +11,15 @@
 - 启动信息提取：`boot::memory(boot_arg)`（解析启动参数中的 RAM 与保留区）和 `boot::kernel_region()`（获取内核镜像占用的物理地址区间）。
 - 系统调用寄存器约定：`syscall::{NUMBER_REGISTER, ARGUMENT_START, is_syscall}`。
 - Trap 与特权级切换：`trap::{init, TrapContext, run_user}`。
-- 用户分页：`user_paging` 提供用户页表、地址上界与物理页初始化操作，目前仅 RISC-V 支持。`mm` 通过此接口使用当前目标的实现；Sv39 表项和 CSR 细节由后端处理。
+- 用户分页：`user_paging` 导出当前目标的用户根页表类型（`UserRoot`，不含 `unmap`）、用户虚拟地址上界（`USER_END`）与物理页框清零初始化原语（`init_zeroed_frame`）；在 `ktest` 配置下另提供 `is_user_inactive` 用于核验地址转换恢复状态。
+  目前仅 RISC-V 支持；`mm` 通过跨架构权限枚举 `Access` 调用该接口，不接触 Sv39 硬件权限位与 CSR 细节。
+  底层 `PageTable` 仅在 RISC-V `ktest` 配置下经 `arch::paging` 重导出供白盒分页自检使用，常规内核代码不直接使用 `PageTable`。
 
 ## 子模块说明
 
+- `user_paging.rs`：收敛当前架构的用户分页与物理页初始化后端重导出，隔离共享内存层与具体 ISA 分页实现。
 - `riscv64/`：面向 QEMU `virt`（S-mode 启动），通过 OpenSBI 执行关机，直接用物理地址访问 16550 UART。
-- `riscv64/paging/`：`PageTable` 管理 Sv39 4 KiB 映射、软件查表、表页所有权和作用域激活；`sv39_user_root.rs` 提供 `Sv39UserRoot`，负责用户根页表所需的平台映射与激活；`pte.rs` 封装硬件编码，`csr.rs` 封装 `satp` 切换与 TLB 失效。分页接口仅由 RISC-V 导出。
+- `riscv64/paging/`：`PageTable` 管理 Sv39 4 KiB 映射、软件查表、表页所有权和作用域激活；`sv39_user_root.rs` 提供 `Sv39UserRoot`，仅负责用户根页表所需的平台映射、用户叶页映射与激活；`user_frame.rs` 提供 Bare 下的物理页框清零与原位初始化原语 `init_zeroed_frame`；`pte.rs` 封装硬件编码，`csr.rs` 封装 `satp` 读取、切换前后 `sfence.vma` 同步与回读确认。底层 `PageTable` 仅在 RISC-V `ktest` 配置下经 `arch::paging` 重导出，常规内核代码经 `arch::user_paging::UserRoot` 与 `init_zeroed_frame` 访问。
 - `loongarch64/`：面向 QEMU `virt` 直接加载 ELF 启动（PLV0），在入口汇编中配置 `DMW0`（`0x9000_0000_0000_0000`）高地址直接映射窗口，通过 QEMU 传入的 EFI 系统表定位设备树（FDT）与 initrd。
 - `boot_data.rs`：双架构共用的 FDT 原始内存借用封装 `MappedFdt`。负责将“从裸指针验证头部与容量上限并构造切片”的 `unsafe` 操作集中在一处，随后交由纯安全的 `mm::fdt` 解析，并自动将 FDT 自身占用的物理区间加入保留列表。
 
