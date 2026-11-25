@@ -68,6 +68,21 @@ fn check_load_plan(image: &[u8; IMAGE_SIZE]) {
 }
 
 fn check_optional_headers(image: &[u8; IMAGE_SIZE]) {
+    // 只有不可读的可执行段覆盖程序头表。
+    let mut execute_only = *image;
+    elf_fixture::put_u32(
+        &mut execute_only,
+        TEXT_PH + elf_fixture::PH_FLAGS,
+        elf_fixture::PF_X,
+    );
+    assert_eq!(
+        parse(&execute_only)
+            .unwrap()
+            .program_headers()
+            .virtual_address,
+        None
+    );
+
     // 缩短首段文件大小，使文件映射上界（0xaf）比程序头表上界（0xb0）少 1 字节，验证 ProgramHeaders::virtual_address 回退为 None。
     let mut partial = *image;
     elf_fixture::put_u64(&mut partial, TEXT_PH + elf_fixture::PH_FILESZ, 0x8f);
@@ -135,6 +150,32 @@ fn check_declared_phdr(image: &[u8; IMAGE_SIZE]) {
         parse(&copies).unwrap().program_headers().virtual_address,
         Some(0x12040)
     );
+
+    // 未声明 PT_PHDR 时，跳过前面仅可执行的副本，选后面的可读副本。
+    let mut implicit = copies;
+    elf_fixture::put_u32(
+        &mut implicit,
+        TEXT_PH + elf_fixture::PH_TYPE,
+        elf_fixture::PT_NULL,
+    );
+    elf_fixture::put_u32(
+        &mut implicit,
+        text + elf_fixture::PH_FLAGS,
+        elf_fixture::PF_X,
+    );
+    assert_eq!(
+        parse(&implicit).unwrap().program_headers().virtual_address,
+        Some(0x12040)
+    );
+
+    // 显式声明指向仅可执行的副本时，不能退回另一份可读副本。
+    let mut unreadable = copies;
+    elf_fixture::put_u32(
+        &mut unreadable,
+        data + elf_fixture::PH_FLAGS,
+        elf_fixture::PF_X,
+    );
+    assert_eq!(parse(&unreadable).unwrap_err(), Error::InvalidPhdrMapping);
 
     // 两条声明完全相同，且都在首个 PT_LOAD 之前。
     let mut duplicate = copies;

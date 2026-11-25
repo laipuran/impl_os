@@ -117,9 +117,9 @@ pub fn parse(image: &[u8]) -> Result<Elf<'_>, Error> {
         previous_start = load.address;
         previous_page_end = page_end;
 
-        if load.file_offset <= file_offset && table_end <= file_end {
+        if load.flags & PF_R != 0 && load.file_offset <= file_offset && table_end <= file_end {
             let address = load.address + (file_offset - load.file_offset);
-            // 有 PT_PHDR 时只接受它所指向的副本，否则使用首个完整映射。
+            // 有 PT_PHDR 时只能使用它声明的副本，否则取首个可读的完整副本。
             if declared_address.map_or(virtual_address.is_none(), |declared| declared == address) {
                 virtual_address = Some(address);
             }
@@ -319,7 +319,7 @@ pub enum Error {
     /// 程序头表的偏移、对齐、条目大小或数量非法，或未完整落在镜像内。
     #[error("invalid ELF program header table")]
     InvalidProgramHeaders,
-    /// `PT_PHDR` 重复、出现在加载段之后、偏移/尺寸与表不符，或未被任何加载段文件数据完整覆盖。
+    /// `PT_PHDR` 重复、出现在加载段之后、偏移/尺寸与表不符，或未被任何具备 `PF_R` 权限的加载段文件数据完整覆盖。
     #[error("invalid ELF PT_PHDR mapping")]
     InvalidPhdrMapping,
     /// 镜像包含 `PT_INTERP`，当前不支持动态链接器/程序解释器。
@@ -362,8 +362,8 @@ pub struct ProgramHeaders {
     pub count: usize,
     /// 程序头表映射到用户态后的虚拟地址。
     ///
-    /// 若镜像包含合法的 `PT_PHDR`，则采用其声明的地址；否则取首个文件数据完整覆盖
-    /// 程序头表的非空 `PT_LOAD` 段所对应的地址。若无加载段覆盖完整表，则为 `None`。
+    /// 若镜像包含合法的 `PT_PHDR`，则采用其声明的地址；否则取首个以文件数据完整覆盖程序头表且带 `PF_R` 的 `PT_LOAD` 段所对应的地址。
+    /// 若程序头表没有完整的可读副本，则为 `None`。
     pub virtual_address: Option<usize>,
 }
 
