@@ -3,30 +3,55 @@
 pub(crate) mod boot_memory;
 // 用户页表后端目前仅在 RISC-V 实现；装载策略本身不依赖 ISA。
 #[cfg(target_arch = "riscv64")]
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 启动入口接入前由自检调用。
 pub(crate) mod address_space;
 pub(crate) mod fdt;
 pub(crate) mod frame;
 pub(crate) mod heap;
 pub(crate) mod regions;
 
+/// 用户映射的访问权限；所有组合都满足 W^X。
+#[cfg_attr(
+    target_arch = "loongarch64",
+    expect(dead_code, reason = "LoongArch 尚未接入用户分页")
+)]
+#[derive(Clone, Copy)]
+pub(crate) enum Access {
+    /// 只读。
+    Read,
+    /// 可读、可写。
+    ReadWrite,
+    /// 只允许取指。
+    Execute,
+    /// 可读、可取指。
+    ReadExecute,
+}
+
 /// 用户地址空间的构建、映射或激活失败。
 ///
 /// 地址空间与分页后端共用此分类；硬件页表的错误由后端转换。
-#[cfg(target_arch = "riscv64")]
-#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(
+    target_arch = "loongarch64",
+    expect(dead_code, reason = "LoongArch 尚未接入用户分页")
+)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum UserMappingError {
     /// 用户地址未对齐或超出允许的映射范围。
+    #[error("user virtual address is unaligned or out of range")]
     InvalidUserAddress,
     /// 初始内容放不进目标页。
+    #[error("initial data does not fit in the page")]
     InitialDataTooLarge,
     /// 目标页已有映射。
+    #[error("user virtual page is already mapped")]
     AlreadyMapped,
     /// 当前寻址模式不支持此操作。
+    #[error("user paging operation is unavailable in the current mode")]
     UnavailableInCurrentMode,
     /// 地址或权限不符合底层映射要求。
+    #[error("address or permissions are not valid for the paging backend")]
     InvalidMapping,
     /// 无法分配页框或映射元数据。
+    #[error("out of memory for frames or mapping metadata")]
     OutOfMemory,
 }
 
@@ -41,7 +66,10 @@ static mut FRAMES: Option<frame::FrameAllocator> = None;
 /// # Panics
 ///
 /// [`init`] 尚未成功完成时 panic。
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))]
+#[cfg_attr(
+    all(target_arch = "loongarch64", not(feature = "ktest")),
+    expect(dead_code, reason = "LoongArch 正常启动只初始化分配器，不分配用户页框")
+)]
 pub fn frames() -> &'static frame::FrameAllocator {
     // SAFETY: 仅关闭中断的启动主核可以访问；init 只在发布引用前写入一次，此后分配器及其堆元数据在内核整个生命周期内有效。
     unsafe { (*core::ptr::addr_of!(FRAMES)).as_ref() }.expect("frame allocator not initialized")

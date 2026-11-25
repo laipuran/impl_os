@@ -9,10 +9,15 @@ use crate::mm::frame::{Frame, FrameAllocator, PAGE_SIZE};
 
 mod csr;
 mod pte;
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 构造。
-pub(crate) mod sv39_user_root;
+pub(in crate::arch) mod sv39_user_root;
+pub(in crate::arch) mod user_frame;
 
 use pte::Entry;
+
+/// 检查当前 `satp` 是否处于 Bare（裸地址）模式。
+pub(in crate::arch) fn is_bare() -> bool {
+    csr::satp() == 0
+}
 
 /// 叶子页面的访问权限；可用 `|` 组合，映射时校验 RISC-V 的合法编码。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +91,6 @@ pub struct PageTable<'a> {
     tables: Vec<Frame<'a>>,
 }
 
-#[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 正常启动尚不运行用户程序。
 impl<'a> PageTable<'a> {
     /// 分配并清零根页表；初始没有任何映射。
     ///
@@ -158,6 +162,13 @@ impl<'a> PageTable<'a> {
     /// # Errors
     ///
     /// 虚拟地址无效、未对齐或没有映射时返回错误。
+    #[cfg_attr(
+        not(feature = "ktest"),
+        expect(
+            dead_code,
+            reason = "用户地址空间随页表整体销毁，只有自检会单独解除映射"
+        )
+    )]
     pub fn unmap(&mut self, virtual_address: usize) -> Result<Translation, Error> {
         let indices = page_indices(virtual_address)?;
         let path = self.walk(indices)?;
@@ -220,13 +231,22 @@ impl<'a> PageTable<'a> {
         Ok(run())
     }
 
+    /// 激活同一根页表，但用指定的 `expected` 检查 `satp` 回读值。
+    ///
+    /// # Errors
+    ///
+    /// 回读值不符时返回 [`Error::ActivationFailed`]，恢复原配置且不执行闭包。
+    ///
+    /// # Safety
+    ///
+    /// 调用方须满足 [`Self::with_active`] 的全部安全前提；即使故意传入错误的期望值，也会先尝试激活目标页表。
     #[cfg(feature = "ktest")]
     unsafe fn with_active_expecting<R>(
         &self,
         expected: usize,
         run: impl FnOnce() -> R,
     ) -> Result<R, Error> {
-        // SAFETY: 调用者须满足 [`Self::with_active`] 的全部安全前提。
+        // SAFETY: 调用方保证临时切换和闭包执行所需的映射及单核约束。
         let _restore =
             unsafe { csr::RestoreSatp::switch_checked(self.root.start_address(), expected) }
                 .ok_or(Error::ActivationFailed)?;

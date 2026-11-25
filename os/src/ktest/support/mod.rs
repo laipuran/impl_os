@@ -2,3 +2,5 @@
 
 pub(crate) mod elf;
 pub(crate) mod fdt;
+#[cfg(target_arch = "riscv64")]
+pub(crate) mod frames;

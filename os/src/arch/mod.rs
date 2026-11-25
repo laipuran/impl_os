@@ -5,6 +5,8 @@ mod riscv64;
 // 底层分页自检直接检查 Sv39 页表和 CSR。
 #[cfg(all(target_arch = "riscv64", feature = "ktest"))]
 pub(crate) use riscv64::paging;
+#[cfg(all(target_arch = "riscv64", feature = "ktest"))]
+pub(crate) use riscv64::UART_BASE;
 #[cfg(target_arch = "riscv64")]
 pub(crate) mod user_paging;
 #[cfg(target_arch = "riscv64")]
