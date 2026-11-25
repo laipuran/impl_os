@@ -4,7 +4,7 @@ use core::arch::asm;
 
 const SV39: usize = 8 << 60;
 
-pub(super) fn satp() -> usize {
+pub(in crate::arch::riscv64) fn satp() -> usize {
     let value;
     // SAFETY: RISC-V 内核在 S-mode 读取当前地址转换配置，不修改机器状态。
     unsafe { asm!("csrr {}, satp", out(reg) value, options(nomem, nostack)) };

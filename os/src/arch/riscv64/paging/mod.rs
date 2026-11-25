@@ -7,7 +7,7 @@ use core::ops::BitOr;
 
 use crate::mm::frame::{Frame, FrameAllocator, PAGE_SIZE};
 
-mod csr;
+pub(super) mod csr;
 mod pte;
 #[cfg_attr(not(feature = "ktest"), allow(dead_code))] // 接入装载流程前仅由 ktest 构造。
 pub(crate) mod sv39_user_root;

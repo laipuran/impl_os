@@ -83,8 +83,8 @@ impl FrameAllocator {
 
 /// 代表单个已分配物理页框独占所有权的 RAII 句柄，销毁时自动将页框归还给 [`FrameAllocator`]。
 ///
-/// `Frame` 仅负责物理页框的分配记账，不直接提供内存引用。调用方在将该物理页映射到页表或通过指针访问前，
-/// 需确保该物理区间对应真实且独占的 RAM，并在 `Frame` 销毁前解除页表映射、停止一切访问。
+/// `Frame` 只保证分配器中的页框所有权。建立映射或借用内存前，调用方须确保该页框
+/// 对应真实且独占的 RAM，并在销毁 `Frame` 前解除相关映射、停止一切访问。
 #[must_use = "丢弃 Frame 句柄会立即回收该物理页框"]
 pub struct Frame<'a> {
     allocator: &'a FrameAllocator,
@@ -104,6 +104,25 @@ impl Frame<'_> {
             index -= count;
         }
         unreachable!("frame index outside managed regions");
+    }
+
+    /// 尝试独占借用整页的字节；页内容可能尚未初始化。
+    ///
+    /// 当前寻址模式不支持物理页访问，或物理地址无法转换为非空内核指针时，返回 `None`。
+    ///
+    /// # Safety
+    ///
+    /// 此页框须对应完整、可读写的真实 RAM。返回的引用存活期间，调用方须保持
+    /// 内核地址到该页框的映射有效且不变，并保证不存在通过其他映射或别名的访问。
+    #[cfg(target_arch = "riscv64")]
+    pub(crate) unsafe fn try_as_uninit_bytes_mut(
+        &mut self,
+    ) -> Option<&mut [core::mem::MaybeUninit<u8>; PAGE_SIZE]> {
+        let mut bytes = crate::arch::phys_access::kernel_ptr(self.start_address())?
+            .cast::<[core::mem::MaybeUninit<u8>; PAGE_SIZE]>();
+        // SAFETY: 返回的引用不长于页框的独占借用；调用方保证整页 RAM 在此期间
+        // 可访问、映射稳定且无别名。MaybeUninit 允许尚未写入的字节。
+        Some(unsafe { bytes.as_mut() })
     }
 }
 

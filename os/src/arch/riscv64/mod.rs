@@ -6,6 +6,7 @@ global_asm!(include_str!("entry.S"));
 
 pub(crate) mod boot;
 pub(crate) mod paging;
+pub(crate) mod phys_access;
 pub(crate) mod syscall;
 pub(crate) mod trap;
 

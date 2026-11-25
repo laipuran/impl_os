@@ -2,13 +2,13 @@
 
 use core::{arch::asm, ptr};
 
-use super::{csr, pte, Error as PagingError, PageTable, Permissions};
+use super::{Error as PagingError, PageTable, Permissions};
 use crate::mm::{
     frame::{Frame, PAGE_SIZE},
     UserMappingError,
 };
 
-use super::super::UART_BASE;
+use super::super::{phys_access, UART_BASE};
 
 // 用户区结束于第一个内核设备映射之前。
 pub(crate) const USER_END: usize = UART_BASE;
@@ -119,32 +119,6 @@ impl Sv39UserRoot {
     }
 }
 
-/// 分配一页可直接初始化的用户 RAM，并清零文件内容之外的区域。
-pub(crate) fn allocate_user_page(
-    offset: usize,
-    initial: &[u8],
-) -> Result<Frame<'static>, UserMappingError> {
-    require_bare()?;
-    assert!(offset <= PAGE_SIZE && initial.len() <= PAGE_SIZE - offset);
-    let page = crate::mm::frames()
-        .alloc()
-        .ok_or(PagingError::OutOfMemory)?;
-    let physical = page.start_address();
-    // 叶页只在 Bare 下按物理地址初始化，激活后通过用户虚拟地址访问；
-    // 物理地址须可编码且非空，与设备的同地址映射范围无关。
-    if physical == 0 || !pte::valid_physical_address(physical) {
-        return Err(PagingError::InvalidPhysicalAddress.into());
-    }
-    // SAFETY: 操作入口已验证 Bare 及页内范围，分配器提供独占真实页，
-    // 存活的源切片与这个新页框不重叠。
-    unsafe {
-        let destination = physical as *mut u8;
-        destination.write_bytes(0, PAGE_SIZE);
-        ptr::copy_nonoverlapping(initial.as_ptr(), destination.add(offset), initial.len());
-    }
-    Ok(page)
-}
-
 impl Sv39UserRoot {
     fn map_kernel(&mut self) -> Result<(), PagingError> {
         extern "C" {
@@ -173,7 +147,7 @@ impl Sv39UserRoot {
 }
 
 fn require_bare() -> Result<(), UserMappingError> {
-    if csr::satp() == 0 {
+    if phys_access::is_bare() {
         Ok(())
     } else {
         Err(UserMappingError::UnavailableInCurrentMode)
@@ -182,5 +156,5 @@ fn require_bare() -> Result<(), UserMappingError> {
 
 #[cfg(feature = "ktest")]
 pub(crate) fn satp() -> usize {
-    csr::satp()
+    super::csr::satp()
 }

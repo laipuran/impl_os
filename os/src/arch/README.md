@@ -11,7 +11,8 @@
 - 启动信息提取：`boot::memory(boot_arg)`（解析启动参数中的 RAM 与保留区）和 `boot::kernel_region()`（获取内核镜像占用的物理地址区间）。
 - 系统调用寄存器约定：`syscall::{NUMBER_REGISTER, ARGUMENT_START, is_syscall}`。
 - Trap 与特权级切换：`trap::{init, TrapContext, run_user}`。
-- 用户分页：`user_paging` 提供用户页表、地址上界与物理页初始化操作，目前仅 RISC-V 支持。`mm` 通过此接口使用当前目标的实现；Sv39 表项和 CSR 细节由后端处理。
+- 用户分页：`user_paging` 提供用户页表和地址上界，目前仅 RISC-V 支持。`mm` 通过此接口使用当前目标的实现；Sv39 表项和 CSR 细节由后端处理。
+- 物理地址访问：`phys_access` 提供当前寻址模式下的物理地址转换；RISC-V 当前支持 Bare 下的非零地址。`mm::frame::Frame` 按独占借用建立可变字节视图。
 
 ## 子模块说明
 

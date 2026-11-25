@@ -6,6 +6,8 @@ mod riscv64;
 #[cfg(all(target_arch = "riscv64", feature = "ktest"))]
 pub(crate) use riscv64::paging;
 #[cfg(target_arch = "riscv64")]
+pub(crate) use riscv64::phys_access;
+#[cfg(target_arch = "riscv64")]
 pub(crate) mod user_paging;
 #[cfg(target_arch = "riscv64")]
 pub(crate) use riscv64::{

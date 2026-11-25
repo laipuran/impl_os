@@ -1,8 +1,12 @@
 //! 独占用户页及其映射；构建期间地址空间保持非活动。
 
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
 
-use crate::arch::user_paging::{self, Permissions, UserRoot, USER_END};
+use crate::arch::{
+    phys_access,
+    user_paging::{Permissions, UserRoot, USER_END},
+};
 
 use super::{
     frame::{Frame, PAGE_SIZE},
@@ -95,9 +99,6 @@ impl AddressSpace {
             .checked_add(PAGE_SIZE)
             .ok_or(UserMappingError::InvalidUserAddress)?;
         Self::check_range(address, end)?;
-        if offset > PAGE_SIZE || initial.len() > PAGE_SIZE - offset {
-            return Err(UserMappingError::InitialDataTooLarge);
-        }
         self.insert_page(address, access, offset, initial)
     }
 
@@ -128,14 +129,40 @@ impl AddressSpace {
         offset: usize,
         initial: &[u8],
     ) -> Result<(), UserMappingError> {
+        let page = alloc_initialized_user_page(offset, initial)?;
         self.pages
             .try_reserve(1)
             .map_err(|_| UserMappingError::OutOfMemory)?;
-        let page = user_paging::allocate_user_page(offset, initial)?;
         self.table.map_user(address, &page, access.permissions())?;
         self.pages.push(page);
         Ok(())
     }
+}
+
+/// 分配并完整初始化一页用户 RAM，未被初始数据覆盖的字节清零。
+fn alloc_initialized_user_page(
+    offset: usize,
+    initial: &[u8],
+) -> Result<Frame<'static>, UserMappingError> {
+    let end = offset
+        .checked_add(initial.len())
+        .filter(|&end| end <= PAGE_SIZE)
+        .ok_or(UserMappingError::InitialDataTooLarge)?;
+    if !phys_access::is_bare() {
+        return Err(UserMappingError::UnavailableInCurrentMode);
+    }
+    let mut page = super::frames()
+        .alloc()
+        .ok_or(UserMappingError::OutOfMemory)?;
+    // SAFETY: 构建地址空间时使用启动分配器提供的独占 RAM；此页尚未映射，
+    // 从检查 Bare 到初始化完成期间保持启动主核上的关中断执行。
+    let bytes =
+        unsafe { page.try_as_uninit_bytes_mut() }.ok_or(UserMappingError::InvalidMapping)?;
+    bytes.fill(MaybeUninit::new(0));
+    for (destination, &byte) in bytes[offset..end].iter_mut().zip(initial) {
+        destination.write(byte);
+    }
+    Ok(page)
 }
 
 #[cfg(feature = "ktest")]
