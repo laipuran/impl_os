@@ -258,9 +258,9 @@ fn hardware_translation(frames: &FrameAllocator) {
         (data.start_address() as *mut u8).write_bytes(0, PAGE_SIZE);
         (stack.start_address() as *mut u8).write_bytes(0, PAGE_SIZE);
         (data.start_address() as *mut usize).write(10);
-        // sfence.vma 不同步指令缓存；复制的新代码需单独执行 fence.i。
-        asm!("fence.i", options(nostack));
     }
+    // `sfence.vma` 不同步指令流；复制探针代码后须单独执行 `fence.i` 同步本核取指。
+    riscv::asm::fence_i();
 
     let kernel = crate::arch::boot::kernel_region().unwrap();
     map_kernel(&mut table, kernel);

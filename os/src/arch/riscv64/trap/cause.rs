@@ -1,5 +1,6 @@
 //! RISC-V 64 `scause` 寄存器解码：区分异步中断与同步异常。
 
+use riscv::{interrupt::Trap, register::scause::Scause};
 use thiserror::Error;
 
 /// 根据 `scause` 最高位（Interrupt bit）分类的 S-mode Trap 原因。
@@ -16,12 +17,9 @@ pub enum TrapCause {
 impl TrapCause {
     /// 解码原始 `scause` 值，根据最高位拆分为中断或同步异常。
     pub fn from_scause(scause: usize) -> Self {
-        let interrupt_bit = 1usize << (usize::BITS - 1);
-        let code = scause & !interrupt_bit;
-        if scause & interrupt_bit != 0 {
-            Self::Interrupt(InterruptCause::from(code))
-        } else {
-            Self::Exception(ExceptionCause::from(code))
+        match Scause::from_bits(scause).cause() {
+            Trap::Interrupt(code) => Self::Interrupt(InterruptCause::from(code)),
+            Trap::Exception(code) => Self::Exception(ExceptionCause::from(code)),
         }
     }
 }

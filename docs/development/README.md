@@ -13,7 +13,7 @@
 由于比赛评测环境完全断网，且评测平台在拷贝源码时可能会过滤以 `.` 开头的隐藏文件（如 Cargo 默认生成的 `.cargo-checksum.json`），仓库采用以下机制维护 `vendor/`：
 
 1. **添加或更新依赖**：
-   - 先确认新依赖支持 `no_std`、兼容 `riscv64` 与 `loongarch64` 且许可证合规。
+   - 先确认新依赖支持 `no_std` 且许可证合规；通用依赖须兼容 `riscv64` 与 `loongarch64`，架构专用依赖须通过 `[target.'cfg(target_arch = ...)'.dependencies]` 限定在对应目标下。
    - 修改 `os/Cargo.toml` 后，先在可联网的开发容器中按变更范围更新并审阅 `Cargo.lock`（例如执行 `cargo update -p <crate>` 或 `cargo metadata`），随后执行：
      ```bash
      just vendor

@@ -7,11 +7,16 @@
 //! - 浮点、向量与扩展状态位（`FS`/`VS`/`XS`）始终保持关闭（`Off`），用户或内核执行扩展指令会触发非法指令异常。
 
 use core::arch::{asm, global_asm};
+use riscv::register::{
+    sstatus::XLEN,
+    stvec::{self, Stvec, TrapMode},
+};
 
 pub mod cause;
 use cause::TrapCause;
 
-const USER_STATUS: usize = 2 << 32; // UXL = 64 位；SPP、SPIE、SIE、FS、VS、XS 均置 0。
+// UXL = 64 位；SPP、SPIE、SIE、FS、VS、XS 均置 0。
+const USER_STATUS: usize = XLEN::XLEN64.into_usize() << 32;
 const DISABLED_STATUS: usize = (1 << 1) | (1 << 5) | (3 << 9) | (3 << 13) | (3 << 15);
 const SWITCH_FRAME_SIZE: usize = 18 * core::mem::size_of::<usize>();
 
@@ -139,18 +144,21 @@ impl TrapContext {
 ///
 /// 必须在主核启动阶段调用一次，且早于任何用户态切换。
 pub fn init() {
-    // SAFETY: 启动阶段仅主核在 S-mode 下执行；汇编入口 `riscv_trap_entry` 已按 4 字节对齐且位于常驻内核代码段。
+    // SAFETY: 仅启动主核在 S-mode 下执行，此时没有活跃的用户态现场。
     unsafe {
         asm!(
             "csrc sstatus, {disabled}",
             "csrw sie, zero",
             "csrw sscratch, zero",
-            "csrw stvec, {vector}",
             disabled = in(reg) DISABLED_STATUS,
-            vector = in(reg) riscv_trap_entry as *const () as usize,
             options(nostack),
         );
     }
+
+    let vector = riscv_trap_entry as *const () as usize;
+    let stvec = Stvec::new(vector, TrapMode::Direct);
+    // SAFETY: 中断已关闭，`sscratch` 已清零；`Stvec::new` 已校验 4 字节对齐，入口位于常驻内核代码段。
+    unsafe { stvec::write(stvec) };
 }
 
 /// 降权进入 U-mode 执行 `context`，当用户态触发任何 Trap 时保存完整整数现场并返回。

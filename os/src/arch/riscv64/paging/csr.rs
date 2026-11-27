@@ -1,15 +1,18 @@
 //! 单核、ASID 为零的作用域切换；不向调用者暴露可遗忘的激活守卫。
 
 use core::arch::asm;
+use riscv::register::satp::{self, Mode, Satp};
 
-const SV39: usize = 8 << 60;
+fn encode_sv39(root: usize) -> usize {
+    let mut value = Satp::from_bits(0);
+    value.set_mode(Mode::Sv39);
+    value.set_ppn(root >> 12);
+    value.bits()
+}
 
 /// 在 S-mode 读取当前完整的 `satp` 值。
 pub(super) fn satp() -> usize {
-    let value;
-    // SAFETY: RISC-V 内核在 S-mode 读取当前地址转换配置，不修改机器状态。
-    unsafe { asm!("csrr {}, satp", out(reg) value, options(nomem, nostack)) };
-    value
+    satp::read().bits()
 }
 
 pub(super) struct RestoreSatp(usize);
@@ -27,7 +30,7 @@ impl RestoreSatp {
     /// - 必须保证守卫按后进先出顺序在原页表失效前销毁；允许通过嵌套调用本函数切换并恢复 `satp`，但不允许绕过该守卫机制直接修改 `satp`。
     pub(super) unsafe fn switch(root: usize) -> Option<Self> {
         // SAFETY: 本函数与 `switch_checked` 的安全前提相同。
-        unsafe { Self::switch_checked(root, SV39 | (root >> 12)) }
+        unsafe { Self::switch_checked(root, encode_sv39(root)) }
     }
 
     /// 切换到 `root` 对应的 Sv39 配置，并将硬件回读值与 `expected` 比较。
@@ -36,7 +39,7 @@ impl RestoreSatp {
     ///
     /// 调用方须满足 [`Self::switch`] 的全部安全前提，无论 `expected` 为何值。
     pub(super) unsafe fn switch_checked(root: usize, expected: usize) -> Option<Self> {
-        let next = SV39 | (root >> 12);
+        let next = encode_sv39(root);
         let previous;
         let actual: usize;
         // SAFETY: 调用者保证 S-mode、单核及切换前后仍可执行并访问当前栈。

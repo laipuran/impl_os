@@ -5,7 +5,7 @@
 - **官方基础镜像**：`zhouzhouyi/os-contest:20260510`（Dockerfile 中通过 SHA256 digest 锁定版本，防止标签漂移）。镜像内置 Ubuntu 24.04.4、QEMU 10.0.2 以及 RISC-V 默认固件 OpenSBI 1.5.1。
 - **本地开发镜像**：基于上述官方镜像构建（`impl-os-dev:20260510`），仅额外安装固定版本的 `just`（1.40.0，校验 SHA256）以及当前 Rust 工具链对应的 `rust-analyzer` 和 `rust-src`，不改动比赛镜像自带的编译器、QEMU 或固件。
 - **Rust 工具链**：`nightly-2025-01-18`（Edition 2021），裸机编译目标为 `riscv64gc-unknown-none-elf` 与 `loongarch64-unknown-none`。
-- **第三方依赖**：当前使用 `buddy_system_allocator`、`log` 和 `thiserror`（均关闭默认特性以适配 `no_std`）。所有依赖版本由 `Cargo.lock` 锁定，源码已提交在 `vendor/` 目录下，首次克隆仓库即可直接离线编译。
+- **第三方依赖**：当前使用通用依赖 `buddy_system_allocator`、`log`、`thiserror`，以及仅用于 RISC-V 64 目标的 `riscv`（均关闭默认特性以适配 `no_std` 或避免引入未使用的默认特性，如 `riscv` 关闭 `riscv-macros` 并启用 `s-mode`，`buddy_system_allocator` 关闭 `alloc` 并启用 `use_spin`）。所有依赖版本由 `Cargo.lock` 锁定，源码已提交在 `vendor/` 目录下，首次克隆仓库即可直接离线编译。
 
 ## 方式一：使用 VS Code Dev Containers（推荐）
 

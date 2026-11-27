@@ -1,9 +1,13 @@
 //! RISC-V 64 Trap 与特权级切换自检（仅在启用 `ktest` feature 时编译）。
 
 use core::arch::{asm, global_asm};
+use riscv::register::{
+    sscratch,
+    sstatus::{self, FS, VS, XS},
+};
 
 use super::cause::{ExceptionCause, InterruptCause, TrapCause};
-use super::{run_user, TrapContext, DISABLED_STATUS, USER_STATUS};
+use super::{run_user, TrapContext, DISABLED_STATUS};
 
 global_asm!(include_str!("riscv64/probes.S"), run_user_shim = sym run_user_shim);
 
@@ -18,6 +22,9 @@ extern "C" {
     fn riscv_kernel_test_user_privileged();
     fn riscv_kernel_test_user_float();
 }
+
+const SSTATUS_UXL_MASK: usize = 0b11 << 32;
+const SSTATUS_UXL_64: usize = 0b10 << 32;
 
 /// 为汇编 ABI 包装函数提供调用 [`run_user`] 的 `extern "C"` 垫片。
 ///
@@ -53,28 +60,22 @@ fn assert_cause_decoding() {
 }
 
 fn assert_kernel_environment() {
-    let scratch: usize;
-    let status: usize;
     let thread_pointer: usize;
-    // SAFETY: 在主核 S-mode 下只读查询当前 CSR 与 `tp` 寄存器，无任何副作用。
+    // SAFETY: 只读取主核的 `tp`，不修改寄存器或内存。
     unsafe {
         asm!(
-            "csrr {scratch}, sscratch",
-            "csrr {status}, sstatus",
             "mv {thread_pointer}, tp",
-            scratch = out(reg) scratch,
-            status = out(reg) status,
             thread_pointer = out(reg) thread_pointer,
             options(nomem, nostack),
         );
     }
-    assert_eq!(scratch, 0, "kernel sscratch invariant");
-    // `sret` 会按硬件规范将 `SPIE` 置 1，但 `SIE` 及浮点/向量扩展位必须保持为 0。
-    assert_eq!(
-        status & (DISABLED_STATUS & !(1 << 5)),
-        0,
-        "kernel interrupts/extensions",
-    );
+    assert_eq!(sscratch::read(), 0, "kernel sscratch invariant");
+    let status = sstatus::read();
+    // `sret` 会按硬件规范将 `SPIE` 置 1，此处不要求 `SPIE = 0`，仅检查 `SIE` 与扩展状态位。
+    assert!(!status.sie(), "kernel interrupts");
+    assert_eq!(status.fs(), FS::Off, "kernel floating-point state");
+    assert_eq!(status.vs(), VS::Off, "kernel vector state");
+    assert_eq!(status.xs(), XS::AllOff, "kernel extension state");
     assert_eq!(thread_pointer, 0, "kernel tp must not come from user state");
 }
 
@@ -139,7 +140,11 @@ fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usi
     assert_eq!(context.pc(), pc, "user exception PC");
     assert_eq!(context.raw_cause(), cause, "user exception cause");
     assert_eq!(context.raw_status() & ((1 << 8) | DISABLED_STATUS), 0);
-    assert_eq!(context.raw_status() & (3 << 32), USER_STATUS, "RV64 UXL");
+    assert_eq!(
+        context.raw_status() & SSTATUS_UXL_MASK,
+        SSTATUS_UXL_64,
+        "RV64 UXL",
+    );
     assert_eq!(context.registers()[0], 0);
     for (index, value) in context.registers().iter().enumerate().skip(1) {
         let expected = if index == 2 { stack } else { base + index };

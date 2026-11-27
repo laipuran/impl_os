@@ -1,6 +1,6 @@
 //! Sv39 用户根页表：建立平台所需映射并管理作用域激活。
 
-use core::{arch::asm, ptr};
+use core::ptr;
 
 use super::{is_bare, pte, Error as PagingError, PageTable, Permissions};
 use crate::mm::{
@@ -145,8 +145,8 @@ impl<'a> Sv39UserRoot<'a> {
         run: impl FnOnce() -> R,
     ) -> Result<R, UserMappingError> {
         require_bare()?;
-        // SAFETY: 当前在 S-mode，切换前同步本核对用户代码的写入与取指。
-        unsafe { asm!("fence.i", options(nostack)) };
+        // 切换页表前，同步本核对用户代码的写入与取指。
+        riscv::asm::fence_i();
         // SAFETY: 内核镜像与 UART 保持同地址监管态映射。调用方保证启动栈、闭包对象、用户叶页和执行环境持续有效。
         Ok(unsafe { self.table.with_active(run) }?)
     }
