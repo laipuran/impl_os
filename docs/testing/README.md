@@ -93,7 +93,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 测试检查内核分段与 UART 的监管态权限、用户代码/数据/栈页的 `RXU`/`RWU` 权限和不同地址空间的独立页框。
 用户态探针验证代码页可读、仅可执行（`XU`）页可取指但读取触发 `LoadPageFault`、只读（`RU`）页可读但写入和取指分别触发 `StoreAmoPageFault` 与 `InstructionPageFault`，以及仅在一侧映射的普通用户页在另一侧触发缺页。
-测试还检查未对齐地址查重、非法及重复映射（含零空闲页框小池下重复映射仍返回 `AlreadyMapped` 且原映射不变）、活动态下调用 `AddressSpace::new`/`map_page`/嵌套 `with_active`/`init_zeroed_frame` 均返回 `UnavailableInCurrentMode` 且外层映射不受影响、用户读取内核代码/UART/根表、写代码页、访问栈保护页和从数据页取指产生的故障。
+测试还检查未对齐地址查重、非法及重复映射（含零空闲页框小池下重复映射仍返回 `AlreadyMapped` 且原映射不变）。在活动态下构建地址空间、调用 `map_page`、嵌套 `with_active` 或初始化物理页均因 `UnavailableInCurrentMode` 被拒绝，不执行回调也不影响外层映射。权限探针另覆盖用户读取内核代码、UART 和根表，写代码页，访问栈保护页，以及从数据页取指产生的故障。
 软件查表在 Bare 下确认根表与中间表页均未建立同地址映射。
 正常退出与故障终止后均检查恢复未激活状态（`is_user_inactive()`）且执行前后空闲页框数一致，销毁地址空间后检查页框全部回收。
 通过时输出 `riscv64: user address space kernel tests passed`；整次自检以总成功标记为准。
@@ -110,7 +110,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 `just test rv` 与 `just test rv debug` 运行此组，源码与探针位于 [`os/src/ktest/task/loader/`](../../os/src/ktest/task/loader/)。
 测试在预先填充非零脏字节（`0xa5`）的小页框池上装载含用户探针的 ELF 镜像，在 U-mode 验证初始栈 16 字节对齐、以奇地址 `argv[0]` 逐字节 `lbu` 核对完整 `argv`/`envp` 及空终止符、按键扫描 `auxv` 核对 `AT_ENTRY`/`AT_PAGESZ` 与成组程序头项。
 同时覆盖可读（实测 U-mode 读取 `AT_PHDR` 程序头）、仅 `PF_X` 与未覆盖三种程序头表布局，并验证跨页文件数据、页首/BSS/页尾全清零及数据段可写性。
-测试还按 `0..needed` 逐容量小池验证中途 OOM 回滚与全部页框回收，以及 W+X 权限、越界段和启动栈容量不足被拒绝，执行前后均核验恢复未激活状态与页框完全回收。
+测试用容量为 `0..needed` 的小页框池逐一验证中途 OOM 返回 `OutOfMemory` 并回收已分配页框；另验证无效 ELF、W+X 权限、越界段、启动栈容量不足、参数内嵌空字节及活动态下再次装载分别返回对应的装载错误，执行前后均核验地址转换状态与页框回收。
 整次自检以总成功标记为准。
 
 ---

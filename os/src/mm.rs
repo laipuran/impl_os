@@ -48,10 +48,10 @@ pub(crate) enum UserMappingError {
     #[error("user paging operation is unavailable in the current mode")]
     UnavailableInCurrentMode,
     /// 地址或权限不符合底层映射要求。
-    #[error("address or permissions are not valid for the paging backend")]
+    #[error("invalid user mapping")]
     InvalidMapping,
     /// 无法分配页框或映射元数据。
-    #[error("out of memory for frames or mapping metadata")]
+    #[error("out of memory for user mapping")]
     OutOfMemory,
 }
 

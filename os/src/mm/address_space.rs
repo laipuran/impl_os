@@ -3,6 +3,7 @@
 //! [`AddressSpace`] 声明字段时确保先销毁底层页表、再归还映射所引用的用户叶页，避免析构期间产生指向已释放物理页的悬垂表项。
 
 use alloc::vec::Vec;
+use core::convert::Infallible;
 
 use crate::arch::user_paging::{self, UserRoot, USER_END};
 
@@ -22,81 +23,67 @@ pub(crate) struct AddressSpace<'a> {
     frames: &'a FrameAllocator,
 }
 
-#[cfg(feature = "ktest")]
-impl AddressSpace<'static> {
-    /// 使用全局分配器建立地址空间及一页清零的用户栈。
-    ///
-    /// # Errors
-    ///
-    /// 当前寻址模式不支持构建时返回 [`UserMappingError::UnavailableInCurrentMode`]；
-    /// 页框或堆空间不足时返回 [`UserMappingError::OutOfMemory`]；
-    /// 底层映射校验失败时返回 [`UserMappingError::InvalidMapping`]。
-    /// 失败时回收本次已申请的全部页框。
-    ///
-    /// # Panics
-    ///
-    /// 内存管理尚未初始化时 panic（见 [`crate::mm::frames`]）。
-    ///
-    /// # Safety
-    ///
-    /// - 仅在关中断的启动主核特权态调用和使用，并满足 [`UserRoot::new`] 与 [`user_paging::init_zeroed_frame`] 的当前架构前提。
-    /// - 全局页框分配器必须已初始化，并在借用期间提供可由当前架构内核指针独占读写的真实 RAM 页框。
-    pub(crate) unsafe fn new() -> Result<Self, UserMappingError> {
-        // SAFETY: 调用方保证启动执行环境和全局分配器满足构建要求。
-        unsafe { Self::new_in(crate::mm::frames()) }
-    }
+/// 构建用户地址空间失败的原因。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuildError<E> {
+    /// 地址空间构建或页映射失败。
+    Mapping(UserMappingError),
+    /// 初始化回调失败。
+    Init(E),
 }
 
 impl<'a> AddressSpace<'a> {
     /// 初始用户栈映射的用户虚拟地址半开上界（不包含该地址）。
     pub(crate) const STACK_TOP: usize = STACK_PAGE + PAGE_SIZE;
 
-    /// 使用指定分配器建立带清零用户栈的地址空间。
+    /// 使用指定分配器构建带一页清零用户栈的地址空间。
     ///
     /// # Errors
     ///
-    /// 当底层分页后端拒绝构建或资源不足时返回对应的 [`UserMappingError`]，失败时回收本次已申请的所有页框。
+    /// 返回 [`Self::with_stack_in`] 的映射错误。
     ///
     /// # Safety
     ///
-    /// 调用方须满足 [`Self::new_with_stack_in`] 的全部安全前提。
+    /// 调用方须满足 [`Self::with_stack_in`] 的执行环境和分配器前提。
     #[cfg(feature = "ktest")]
-    unsafe fn new_in(frames: &'a FrameAllocator) -> Result<Self, UserMappingError> {
-        // SAFETY: 调用方保证分配器和启动执行环境满足构建要求；空回调不改变执行环境。
-        let (space, ()) =
-            unsafe { Self::new_with_stack_in(frames, |_| Ok::<_, UserMappingError>(())) }?;
+    pub(crate) unsafe fn new_in(frames: &'a FrameAllocator) -> Result<Self, UserMappingError> {
+        // SAFETY: 调用方保证执行环境与分配器有效；空回调不改变运行状态。
+        let (space, ()) = unsafe { Self::with_stack_in(frames, |_| Ok::<_, Infallible>(())) }
+            .map_err(|error| match error {
+                BuildError::Mapping(error) => error,
+                BuildError::Init(never) => match never {},
+            })?;
         Ok(space)
     }
 
-    /// 使用指定分配器建立地址空间，并在已清零的物理栈页上原位构造初始用户栈。
+    /// 构建地址空间和一页用户栈，返回地址空间与栈初始化结果。
     ///
-    /// 传入 `init` 的页内缓冲区对应用户虚拟区间 `[STACK_TOP - PAGE_SIZE, STACK_TOP)`。
+    /// 回调在已清零的物理栈页上原位执行，缓冲区对应以 [`Self::STACK_TOP`] 为上界的最后一页。
     ///
     /// # Errors
     ///
-    /// 当前寻址模式不支持构建时返回 [`UserMappingError::UnavailableInCurrentMode`] 的转换结果；
-    /// 页框或堆空间不足时返回 [`UserMappingError::OutOfMemory`] 的转换结果；
-    /// 底层映射校验失败时返回 [`UserMappingError::InvalidMapping`] 的转换结果；
-    /// 或直接返回 `init` 产生的错误。失败时回收本次构建已申请的全部页框。
+    /// 寻址模式不受支持、资源不足或映射校验失败时返回 [`BuildError::Mapping`]；
+    /// 栈初始化回调失败时返回 [`BuildError::Init`]。
+    /// 失败时回收本次构建已申请的全部页框。
     ///
     /// # Safety
     ///
-    /// - 仅在关中断的启动主核特权态调用和使用，并满足 [`UserRoot::new`] 与 [`user_paging::init_zeroed_frame`] 的当前架构前提。
-    /// - `frames` 在借用期间须提供可由当前架构内核指针独占访问的真实 RAM 页框。
-    /// - `init` 执行期间不得修改地址转换配置，也不得开启中断或并发。
-    pub(crate) unsafe fn new_with_stack_in<R, E: From<UserMappingError>>(
+    /// - 仅在关中断的启动主核特权态调用和使用，并满足 [`UserRoot::new`] 的当前架构前提。
+    /// - 分配器在借用期间须提供可由当前架构内核指针独占读写的真实 RAM 页框。
+    /// - 栈初始化回调执行期间不得修改地址转换配置，也不得开启中断或并发。
+    pub(crate) unsafe fn with_stack_in<R, E>(
         frames: &'a FrameAllocator,
         init: impl FnOnce(&mut [u8; PAGE_SIZE]) -> Result<R, E>,
-    ) -> Result<(Self, R), E> {
+    ) -> Result<(Self, R), BuildError<E>> {
         // SAFETY: 调用方保证分配器和启动执行环境满足构建要求。
-        let table = unsafe { UserRoot::new(frames) }?;
+        let table = unsafe { UserRoot::new(frames) }.map_err(BuildError::Mapping)?;
         let mut space = Self {
             table,
             pages: Vec::new(),
             frames,
         };
-        // SAFETY: 调用方保证 `init` 执行期间不改变地址转换配置，也不会开启中断或并发。
-        let result = unsafe { space.insert_page(STACK_PAGE, Access::ReadWrite, init) }?;
+        // SAFETY: 调用方保证回调执行期间不改变地址转换配置，也不会开启中断或并发。
+        let result = unsafe { space.insert_page_with(STACK_PAGE, Access::ReadWrite, init) }?;
         Ok((space, result))
     }
 
@@ -144,13 +131,17 @@ impl<'a> AddressSpace<'a> {
         }
         // SAFETY: 回调只向页内缓冲区复制数据，不改变地址转换配置，也不开启中断或并发。
         unsafe {
-            self.insert_page(address, access, |buf| {
+            self.insert_page_with(address, access, |buf| {
                 if !initial.is_empty() {
                     buf[offset..][..initial.len()].copy_from_slice(initial);
                 }
-                Ok::<_, UserMappingError>(())
+                Ok::<_, Infallible>(())
             })
         }
+        .map_err(|error| match error {
+            BuildError::Mapping(error) => error,
+            BuildError::Init(never) => match never {},
+        })
     }
 
     /// 临时激活地址空间；闭包退出后恢复原地址空间。
@@ -177,23 +168,56 @@ impl<'a> AddressSpace<'a> {
     /// # Safety
     ///
     /// `init` 执行期间不得修改地址转换配置，也不得开启中断或并发。
-    unsafe fn insert_page<R, E: From<UserMappingError>>(
+    unsafe fn insert_page_with<R, E>(
         &mut self,
         address: usize,
         access: Access,
         init: impl FnOnce(&mut [u8; PAGE_SIZE]) -> Result<R, E>,
-    ) -> Result<R, E> {
-        self.table.ensure_unmapped(address)?;
+    ) -> Result<R, BuildError<E>> {
+        self.table
+            .ensure_unmapped(address)
+            .map_err(BuildError::Mapping)?;
         self.pages
             .try_reserve(1)
-            .map_err(|_| UserMappingError::OutOfMemory)?;
-        let mut page = self.frames.alloc().ok_or(UserMappingError::OutOfMemory)?;
-        // SAFETY: 构造契约保证启动执行环境和真实 RAM；刚分配的 `page` 独占可按同地址访问的物理页。
-        // 本函数的调用方保证 `init` 不改变地址转换配置，也不启用中断或并发。
-        let result = unsafe { user_paging::init_zeroed_frame(&mut page, init) }?;
-        self.table.map_user(address, &page, access)?;
+            .map_err(|_| BuildError::Mapping(UserMappingError::OutOfMemory))?;
+        let mut page = self
+            .frames
+            .alloc()
+            .ok_or(BuildError::Mapping(UserMappingError::OutOfMemory))?;
+        // SAFETY: 构造契约保证启动执行环境和真实 RAM；刚分配的页框可由内核独占读写。
+        // 调用方保证 `init` 不改变地址转换配置，也不启用中断或并发。
+        let result = unsafe { init_zeroed_frame(&mut page, init) }
+            .map_err(BuildError::Mapping)?
+            .map_err(BuildError::Init)?;
+        self.table
+            .map_user(address, &page, access)
+            .map_err(BuildError::Mapping)?;
         self.pages.push(page);
         Ok(result)
+    }
+}
+
+/// 清零独占物理页框，并在回调期间借出整页可变缓冲区。
+///
+/// # Errors
+///
+/// 当架构后端无法提供当前模式下的内核指针时返回对应的 [`UserMappingError`]，不执行回调。
+///
+/// # Safety
+///
+/// - 仅在关中断的启动主核特权态调用。
+/// - `frame` 须对应真实、独占的整页 RAM，可通过 [`user_paging::frame_ptr`] 返回的指针完整读写，且不与任何存活的引用重叠。
+/// - `init` 执行期间不得修改地址转换配置，也不得开启中断或并发。
+unsafe fn init_zeroed_frame<R>(
+    frame: &mut Frame<'_>,
+    init: impl FnOnce(&mut [u8; PAGE_SIZE]) -> R,
+) -> Result<R, UserMappingError> {
+    let buf = user_paging::frame_ptr(frame)?;
+    // SAFETY: Frame 保证整页对齐，后端已确认当前寻址模式可用且地址非零、可编码。
+    // 调用方保证整页可通过该指针读写、无存活引用重叠，且回调不改变寻址或并发状态；先清零再建立本次回调期内的可变引用。
+    unsafe {
+        buf.write_bytes(0, 1);
+        Ok(init(&mut *buf))
     }
 }
 

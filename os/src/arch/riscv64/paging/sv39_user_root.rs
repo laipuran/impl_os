@@ -2,7 +2,7 @@
 
 use core::{arch::asm, ptr};
 
-use super::{is_bare, Error as PagingError, PageTable, Permissions};
+use super::{is_bare, pte, Error as PagingError, PageTable, Permissions};
 use crate::mm::{
     frame::{Frame, FrameAllocator, PAGE_SIZE},
     Access, UserMappingError,
@@ -14,6 +14,23 @@ use super::super::UART_BASE;
 pub(crate) const USER_END: usize = UART_BASE;
 const RX: Permissions = Permissions(Permissions::READ.0 | Permissions::EXECUTE.0);
 const RW: Permissions = Permissions(Permissions::READ.0 | Permissions::WRITE.0);
+
+/// 返回 Bare 模式下与页框物理地址相同的整页内核裸指针，不访问内存。
+///
+/// 解引用前，调用方仍须保证整页可通过该指针访问，并满足独占访问条件。
+///
+/// # Errors
+///
+/// 当前不处于 Bare 模式时返回 [`UserMappingError::UnavailableInCurrentMode`]；
+/// 地址为零或超出 Sv39 物理地址编码范围时返回 [`UserMappingError::InvalidMapping`]。
+pub(crate) fn frame_ptr(frame: &Frame<'_>) -> Result<*mut [u8; PAGE_SIZE], UserMappingError> {
+    require_bare()?;
+    let physical = frame.start_address();
+    if physical == 0 || !pte::valid_physical_address(physical) {
+        return Err(UserMappingError::InvalidMapping);
+    }
+    Ok(physical as *mut [u8; PAGE_SIZE])
+}
 
 impl From<PagingError> for UserMappingError {
     fn from(error: PagingError) -> Self {

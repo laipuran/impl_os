@@ -69,15 +69,15 @@
 
 #### 最小用户地址空间
 
-`mm::address_space::AddressSpace` 持有用户叶页、页框分配器借用和独立的用户根页表，经 `arch::user_paging` 获取当前架构的 `UserRoot`、用户虚拟地址上界 `USER_END` 及底层物理页初始化原语 `init_zeroed_frame`（位于 `riscv64/paging/user_frame.rs`），并通过跨架构的 `mm::Access` 枚举表达访问权限（不向共享层暴露 Sv39 硬件 `Permissions` 位掩码）。
-RISC-V 的 `Sv39UserRoot` 专注于根页表映射与作用域激活，负责内核和 UART 的同地址、`U=0` 映射：代码 `RX`、只读数据 `R`、可写数据与 BSS（含启动栈和静态堆）`RW`、UART `RW`；物理页框的分配与偏移拷贝收敛在共享 `AddressSpace` 中，仅将物理地址到内核可写缓冲的清零借用委托给架构层的 `unsafe init_zeroed_frame`。
+`mm::address_space::AddressSpace` 持有用户叶页、页框分配器借用和独立的用户根页表，经 `arch::user_paging` 获取 `UserRoot`、用户虚拟地址上界 `USER_END` 以及物理页框到内核裸指针的转换 `frame_ptr`。共享层通过 `mm::Access` 表达访问权限，不接触 Sv39 硬件权限位。
+RISC-V 的 `Sv39UserRoot` 负责内核和 UART 的同地址、`U=0` 映射：代码 `RX`、只读数据 `R`、可写数据与 BSS（含启动栈和静态堆）`RW`、UART `RW`；用户叶页的分配、清零和初始化由 `AddressSpace` 负责。
 各空间分别建立内核映射，指向同一份内核存储，直映范围限于内核镜像和 UART。
 同步运行期间由硬件走表，软件查表与修改在恢复 Bare 后进行，因此激活时无需为表页建立同地址映射或分配额外页框。
 
 普通用户页范围为 `[0x1000, 0x0fffe000)`，页地址按 4 KiB 对齐；支持 `RU`、`RWU`、`XU` 和 `RXU`。
 映射新页前先确认处于 Bare 模式并检查目标页尚未映射，再申请元数据和页框；新页先清零，再复制初始字节到指定页内偏移。
 `0x0fffe000` 起的一页保留为栈保护页，之后一页为 `RWU` 用户栈，栈映射半开上界为 `0x10000000`。
-构建地址空间时可直接在已清零的物理栈页上原位执行初始化回调，避免在 64 KiB 内核启动栈上分配临时页缓冲和冗余拷贝。
+调用 `AddressSpace::with_stack_in(frames, init)` 构建地址空间，在已清零的物理栈页上原位执行 `init`，避免在 64 KiB 内核启动栈上分配临时页缓冲及冗余拷贝。返回的 `BuildError` 区分映射错误和初始化回调错误。
 销毁时先释放根表及中间表页，再归还本空间的用户叶页框。
 
 地址空间在 Bare 下构建。

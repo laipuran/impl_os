@@ -4,7 +4,7 @@ use crate::{
     arch::trap::TrapContext,
     mm::{
         self,
-        address_space::AddressSpace,
+        address_space::{AddressSpace, BuildError},
         frame::{FrameAllocator, PAGE_SIZE},
         Access, UserMappingError,
     },
@@ -15,12 +15,31 @@ use super::{elf, user_stack, ExitStatus, Task};
 /// 静态用户程序装载失败。
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum Error {
-    #[error("ELF parse failed: {0}")]
-    Elf(#[from] elf::Error),
-    #[error("initial stack construction failed: {0}")]
-    Stack(#[from] user_stack::Error),
-    #[error("user mapping failed: {0}")]
-    Memory(#[from] UserMappingError),
+    /// 镜像未通过 ELF 校验。
+    #[error("invalid static ELF image: {0}")]
+    InvalidElf(#[source] elf::Error),
+    /// 参数、环境变量及辅助向量无法放入启动栈。
+    #[error("initial stack is too large")]
+    StackTooLarge,
+    /// 参数或环境变量含内嵌空字节。
+    #[error("initial stack arguments or environment contain a NUL byte")]
+    InvalidStackArguments,
+    /// 装载器提供的栈地址或辅助向量不满足栈布局约束。
+    #[error("invalid initial stack setup")]
+    StackSetupFailed,
+    /// 加载段的映射页区间超出普通用户映射范围。
+    #[error("invalid ELF segment address")]
+    InvalidSegmentAddress,
+    /// 当前寻址模式不支持构建用户地址空间。
+    #[error("user paging is unavailable in the current mode")]
+    PagingUnavailable,
+    /// 页框或映射元数据不足。
+    #[error("out of memory for the loaded program")]
+    OutOfMemory,
+    /// 地址、内容或权限不满足页映射约束。
+    #[error("failed to map a user page: {0}")]
+    MappingFailed(#[source] UserMappingError),
+    /// 加载段违反 W^X、只允许写入或不可访问。
     #[error("unsupported ELF segment permissions")]
     UnsupportedPermissions,
 }
@@ -38,10 +57,11 @@ impl LoadedProgram<'static> {
     ///
     /// # Errors
     ///
-    /// ELF 解析失败时返回 [`Error::Elf`]；
-    /// 初始用户栈构造失败时返回 [`Error::Stack`]；
-    /// 段权限不满足 W^X、为只写或不可访问时返回 [`Error::UnsupportedPermissions`]；
-    /// 地址空间范围、模式或资源不足失败时返回 [`Error::Memory`]。
+    /// - ELF 校验失败时返回 [`Error::InvalidElf`]；加载段超出普通用户映射范围时返回 [`Error::InvalidSegmentAddress`]。
+    /// - 段权限违反 W^X、只允许写入或不可访问时返回 [`Error::UnsupportedPermissions`]。
+    /// - 启动栈放不下时返回 [`Error::StackTooLarge`]；参数或环境变量含内嵌空字节时返回 [`Error::InvalidStackArguments`]；栈布局前提不满足时返回 [`Error::StackSetupFailed`]。
+    /// - 当前寻址模式不支持构建时返回 [`Error::PagingUnavailable`]；资源不足时返回 [`Error::OutOfMemory`]；其余映射失败时返回 [`Error::MappingFailed`]。
+    ///
     /// 失败时销毁未完成的地址空间并回收本次已分配的全部页框。
     ///
     /// # Panics
@@ -50,7 +70,7 @@ impl LoadedProgram<'static> {
     ///
     /// # Safety
     ///
-    /// - 仅在关中断的启动主核特权态调用和使用，并满足 [`AddressSpace::new_with_stack_in`] 要求的当前架构执行环境前提。
+    /// - 仅在关中断的启动主核特权态调用和使用，并满足 [`AddressSpace::with_stack_in`] 的当前架构前提。
     /// - 全局页框分配器必须已初始化，并提供可由当前架构内核指针独占读写的真实 RAM 页框。
     #[cfg_attr(
         not(feature = "ktest"),
@@ -67,24 +87,34 @@ impl<'a> LoadedProgram<'a> {
     ///
     /// # Errors
     ///
-    /// 当 ELF 校验失败（[`Error::Elf`]）、初始栈构造失败（[`Error::Stack`]）、段权限不受支持（[`Error::UnsupportedPermissions`]）或地址空间映射与资源分配失败（[`Error::Memory`]）时返回对应错误，并销毁未完成的地址空间以回收已分配页框。
+    /// 返回与 [`LoadedProgram::load`] 相同的装载错误，失败时回收本次已分配的全部页框。
     ///
     /// # Safety
     ///
-    /// 调用方须满足 [`AddressSpace::new_with_stack_in`] 对执行环境和分配器的全部安全前提。
+    /// 调用方须满足 [`AddressSpace::with_stack_in`] 对执行环境和分配器的全部安全前提。
     unsafe fn load_in(
         frames: &'a FrameAllocator,
         image: &[u8],
         argv: &[&[u8]],
         envp: &[&[u8]],
     ) -> Result<Self, Error> {
-        let elf = elf::parse(image)?;
+        let elf = elf::parse(image).map_err(Error::InvalidElf)?;
         // SAFETY: 调用方保证启动执行环境和分配器满足地址空间构建要求；栈构造回调只处理数据，不改变地址转换配置，也不启用中断或并发。
         let (mut space, sp) = unsafe {
-            AddressSpace::new_with_stack_in(frames, |buf| {
-                build_initial_stack(&elf, buf, argv, envp)
-            })
-        }?;
+            AddressSpace::with_stack_in(frames, |buf| build_initial_stack(&elf, buf, argv, envp))
+        }
+        .map_err(|error| match error {
+            BuildError::Mapping(error) => mapping_error(error),
+            BuildError::Init(error) => match error {
+                user_stack::Error::SizeOverflow | user_stack::Error::InsufficientSpace => {
+                    Error::StackTooLarge
+                }
+                user_stack::Error::InteriorNul => Error::InvalidStackArguments,
+                user_stack::Error::AddressUnderflow | user_stack::Error::ReservedAuxKey => {
+                    Error::StackSetupFailed
+                }
+            },
+        })?;
         for segment in elf.load_segments() {
             map_segment(&mut space, segment)?;
         }
@@ -120,7 +150,7 @@ fn build_initial_stack(
     buf: &mut [u8; PAGE_SIZE],
     argv: &[&[u8]],
     envp: &[&[u8]],
-) -> Result<usize, Error> {
+) -> Result<usize, user_stack::Error> {
     use user_stack::{AuxEntry, AT_ENTRY, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM};
 
     let entry = AuxEntry {
@@ -153,13 +183,7 @@ fn build_initial_stack(
         &[entry, page_size]
     };
     // 没有可信熵源，不提供 AT_RANDOM。
-    Ok(user_stack::build(
-        AddressSpace::STACK_TOP,
-        buf,
-        argv,
-        envp,
-        auxv,
-    )?)
+    user_stack::build(AddressSpace::STACK_TOP, buf, argv, envp, auxv)
 }
 
 fn segment_access(permissions: elf::Permissions) -> Result<Access, Error> {
@@ -173,18 +197,32 @@ fn segment_access(permissions: elf::Permissions) -> Result<Access, Error> {
 }
 
 fn map_segment(space: &mut AddressSpace<'_>, segment: elf::LoadSegment<'_>) -> Result<(), Error> {
-    AddressSpace::check_range(segment.pages.start, segment.pages.end)?;
+    AddressSpace::check_range(segment.pages.start, segment.pages.end)
+        .map_err(|_| Error::InvalidSegmentAddress)?;
     let access = segment_access(segment.permissions)?;
     let mut data = segment.data;
     let mut offset = segment.data_offset;
     for address in segment.pages.step_by(PAGE_SIZE) {
         let (page, rest) = data.split_at(data.len().min(PAGE_SIZE - offset));
-        space.map_page(address, access, offset, page)?;
+        space
+            .map_page(address, access, offset, page)
+            .map_err(mapping_error)?;
         data = rest;
         offset = 0;
     }
     debug_assert!(data.is_empty());
     Ok(())
+}
+
+fn mapping_error(error: UserMappingError) -> Error {
+    match error {
+        UserMappingError::InvalidUserAddress
+        | UserMappingError::InitialDataTooLarge
+        | UserMappingError::AlreadyMapped
+        | UserMappingError::InvalidMapping => Error::MappingFailed(error),
+        UserMappingError::UnavailableInCurrentMode => Error::PagingUnavailable,
+        UserMappingError::OutOfMemory => Error::OutOfMemory,
+    }
 }
 
 #[cfg(feature = "ktest")]
