@@ -49,7 +49,6 @@ pub(crate) fn shutdown() -> ! {
 
 pub(crate) fn halt() -> ! {
     loop {
-        // SAFETY: 当前运行在 S-mode 且全局中断已关闭，执行 `wfi` 让当前核休眠等待。
-        unsafe { asm!("wfi", options(nomem, nostack)) };
+        riscv::asm::wfi();
     }
 }

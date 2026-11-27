@@ -1,11 +1,12 @@
 //! 真实页框上的软件查表、失败回滚，以及临时启用 Sv39 的用户隔离探针。
 
 use core::arch::{asm, global_asm};
+use riscv::interrupt::{Exception, Trap};
 
 use super::csr::satp;
 use super::{Error, PageTable, Permissions, Translation};
 use crate::arch::riscv64::UART_BASE;
-use crate::arch::trap::{cause::ExceptionCause, cause::TrapCause, run_user, TrapContext};
+use crate::arch::trap::{run_user, TrapContext};
 use crate::ktest::support::frames::with_small_pool;
 use crate::mm::frame::{FrameAllocator, PAGE_SIZE};
 use crate::mm::regions::Region;
@@ -178,13 +179,13 @@ fn allocation_rollback(frames: &FrameAllocator) {
     }
 }
 
-fn assert_user_fault(entry: usize, address: usize, cause: ExceptionCause) {
+fn assert_user_fault(entry: usize, address: usize, cause: Exception) {
     let mut context = TrapContext::user(entry, USER_STACK + PAGE_SIZE);
     context.registers_mut()[10] = address;
     // SAFETY: 活动页表保护内核和页表存储；固定探针只访问给定用户地址。
     // 故意缺失的映射或权限触发同步用户故障，由已初始化的 trap 返回本栈。
     unsafe { run_user(&mut context) };
-    assert_eq!(context.cause(), TrapCause::Exception(cause));
+    assert_eq!(context.cause(), Ok(Trap::Exception(cause)));
     assert_eq!(context.pc(), entry);
     assert_eq!(context.bad_addr(), address);
 }
@@ -258,9 +259,9 @@ fn hardware_translation(frames: &FrameAllocator) {
         (data.start_address() as *mut u8).write_bytes(0, PAGE_SIZE);
         (stack.start_address() as *mut u8).write_bytes(0, PAGE_SIZE);
         (data.start_address() as *mut usize).write(10);
-        // sfence.vma 不同步指令缓存；复制的新代码需单独执行 fence.i。
-        asm!("fence.i", options(nostack));
     }
+    // `sfence.vma` 不同步指令流；复制探针代码后须单独执行 `fence.i` 同步本核取指。
+    riscv::asm::fence_i();
 
     let kernel = crate::arch::boot::kernel_region().unwrap();
     map_kernel(&mut table, kernel);
@@ -303,10 +304,10 @@ fn hardware_translation(frames: &FrameAllocator) {
                 );
                 // SAFETY: 用户代码仅修改私有数据和栈，然后通过 exit 返回。
                 assert_eq!(task.run(), ExitStatus::Exited(11));
-                assert_user_fault(load, UNMAPPED, ExceptionCause::LoadPageFault);
-                assert_user_fault(load, kernel.start, ExceptionCause::LoadPageFault);
-                assert_user_fault(store, USER_CODE, ExceptionCause::StoreAmoPageFault);
-                assert_user_fault(USER_DATA, USER_DATA, ExceptionCause::InstructionPageFault);
+                assert_user_fault(load, UNMAPPED, Exception::LoadPageFault);
+                assert_user_fault(load, kernel.start, Exception::LoadPageFault);
+                assert_user_fault(store, USER_CODE, Exception::StorePageFault);
+                assert_user_fault(USER_DATA, USER_DATA, Exception::InstructionPageFault);
             })
             .unwrap();
     }
@@ -335,10 +336,7 @@ fn hardware_translation(frames: &FrameAllocator) {
                 let mut context = TrapContext::user(load, USER_STACK + PAGE_SIZE);
                 context.registers_mut()[10] = USER_DATA;
                 run_user(&mut context);
-                assert_eq!(
-                    context.cause(),
-                    TrapCause::Exception(ExceptionCause::UserEnvironmentCall)
-                );
+                assert_eq!(context.cause(), Ok(Trap::Exception(Exception::UserEnvCall)));
                 assert_eq!(context.registers()[10], 0, "remapped user data");
             })
             .unwrap();

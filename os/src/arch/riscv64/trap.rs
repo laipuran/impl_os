@@ -6,12 +6,21 @@
 //!   （从写 `sscratch` 到 `sret` 完成前的短暂 S-mode 过渡窗口内 `sscratch` 非零，该窗口内的 `TrapContext` 访存绝不能触发异常）；
 //! - 浮点、向量与扩展状态位（`FS`/`VS`/`XS`）始终保持关闭（`Off`），用户或内核执行扩展指令会触发非法指令异常。
 
-use core::arch::{asm, global_asm};
+use core::{
+    arch::{asm, global_asm},
+    fmt,
+};
+use riscv::{
+    interrupt::{Exception, Interrupt, Trap},
+    register::{
+        scause::Scause,
+        sstatus::XLEN,
+        stvec::{self, Stvec, TrapMode},
+    },
+};
 
-pub mod cause;
-use cause::TrapCause;
-
-const USER_STATUS: usize = 2 << 32; // UXL = 64 位；SPP、SPIE、SIE、FS、VS、XS 均置 0。
+// UXL = 64 位；SPP、SPIE、SIE、FS、VS、XS 均置 0。
+const USER_STATUS: usize = XLEN::XLEN64.into_usize() << 32;
 const DISABLED_STATUS: usize = (1 << 1) | (1 << 5) | (3 << 9) | (3 << 13) | (3 << 15);
 const SWITCH_FRAME_SIZE: usize = 18 * core::mem::size_of::<usize>();
 
@@ -114,9 +123,25 @@ impl TrapContext {
         self.gpr[2]
     }
 
-    /// 将保存的 `scause` 解码为类型化的 [`TrapCause`]。
-    pub fn cause(&self) -> TrapCause {
-        TrapCause::from_scause(self.scause)
+    /// 将保存的 `scause` 解码为标准 S-mode 中断或异常。
+    ///
+    /// # Errors
+    ///
+    /// 编码不属于标准枚举时，返回原始原因码及其中断或异常分类。
+    pub fn cause(&self) -> Result<Trap<Interrupt, Exception>, Trap<usize, usize>> {
+        let raw = Scause::from_bits(self.scause).cause();
+        raw.try_into().map_err(|_| raw)
+    }
+
+    /// 返回用于内核 Trap 日志的原因描述。
+    pub(crate) fn cause_for_log(&self) -> impl fmt::Display + '_ {
+        CauseDisplay(self)
+    }
+
+    /// 判断保存的 Trap 是否为断点异常。
+    #[cfg(feature = "ktest")]
+    pub(crate) fn is_breakpoint(&self) -> bool {
+        self.cause() == Ok(Trap::Exception(Exception::Breakpoint))
     }
 
     /// 返回原始的 `scause` 寄存器值（含最高位中断标志）。
@@ -135,22 +160,38 @@ impl TrapContext {
     }
 }
 
+struct CauseDisplay<'a>(&'a TrapContext);
+
+impl fmt::Display for CauseDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.cause() {
+            Ok(Trap::Interrupt(cause)) => write!(f, "interrupt: {cause:?}"),
+            Ok(Trap::Exception(cause)) => write!(f, "exception: {cause:?}"),
+            Err(Trap::Interrupt(code)) => write!(f, "interrupt: unknown interrupt code {code}"),
+            Err(Trap::Exception(code)) => write!(f, "exception: unknown exception code {code}"),
+        }
+    }
+}
+
 /// 安装 S-mode Direct 模式异常入口（`stvec`），关闭中断与扩展并清零 `sscratch`。
 ///
 /// 必须在主核启动阶段调用一次，且早于任何用户态切换。
 pub fn init() {
-    // SAFETY: 启动阶段仅主核在 S-mode 下执行；汇编入口 `riscv_trap_entry` 已按 4 字节对齐且位于常驻内核代码段。
+    // SAFETY: 仅启动主核在 S-mode 下执行，此时没有活跃的用户态现场。
     unsafe {
         asm!(
             "csrc sstatus, {disabled}",
             "csrw sie, zero",
             "csrw sscratch, zero",
-            "csrw stvec, {vector}",
             disabled = in(reg) DISABLED_STATUS,
-            vector = in(reg) riscv_trap_entry as *const () as usize,
             options(nostack),
         );
     }
+
+    let vector = riscv_trap_entry as *const () as usize;
+    let stvec = Stvec::new(vector, TrapMode::Direct);
+    // SAFETY: 中断已关闭，`sscratch` 已清零；`Stvec::new` 已校验 4 字节对齐，入口位于常驻内核代码段。
+    unsafe { stvec::write(stvec) };
 }
 
 /// 降权进入 U-mode 执行 `context`，当用户态触发任何 Trap 时保存完整整数现场并返回。

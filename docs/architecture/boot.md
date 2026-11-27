@@ -135,7 +135,7 @@ RISC-V 的 `Sv39UserRoot` 负责内核和 UART 的同地址、`U=0` 映射：代
 
 ELF 解析器和启动栈构造器均为纯安全、零堆分配的数据处理层；`task::loader` 使用其结果建立用户映射并初始化任务。
 
-`task::loader::LoadedProgram::load` 在 RISC-V 的 Bare 环境下装载静态 `ET_EXEC`，在物理栈页上原位构建单页启动栈，按照 `PT_LOAD` 设置权限，拒绝 W+X、只写和无访问权限的段。
+`task::loader::Program::load_from_bytes` 在 RISC-V 的 Bare 环境下装载静态 `ET_EXEC`，在物理栈页上原位构建单页启动栈，按照 `PT_LOAD` 设置权限，拒绝 W+X、只写和无访问权限的段。
 辅助向量始终包含 `AT_ENTRY` 和 `AT_PAGESZ`；仅当整张程序头表完整落在具备 `PF_R` 权限的映射段内时，才成组提供 `AT_PHDR`、`AT_PHENT` 和 `AT_PHNUM`，否则整组省略。
 当前仅承诺上述最小启动 ABI，在接入可信熵源前不提供 `AT_RANDOM`（不以固定常量伪装随机熵）。
 初始 PC 由 ELF 提供，初始 SP 指向栈内的 `argc`。

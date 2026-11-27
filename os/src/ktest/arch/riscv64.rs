@@ -1,9 +1,15 @@
 //! RISC-V 64 Trap 与特权级切换自检（仅在启用 `ktest` feature 时编译）。
 
 use core::arch::{asm, global_asm};
+use riscv::{
+    interrupt::{Exception, Interrupt, Trap},
+    register::{
+        sscratch,
+        sstatus::{self, FS, VS, XS},
+    },
+};
 
-use super::cause::{ExceptionCause, InterruptCause, TrapCause};
-use super::{run_user, TrapContext, DISABLED_STATUS, USER_STATUS};
+use super::{run_user, TrapContext};
 
 global_asm!(include_str!("riscv64/probes.S"), run_user_shim = sym run_user_shim);
 
@@ -19,6 +25,12 @@ extern "C" {
     fn riscv_kernel_test_user_float();
 }
 
+const SSTATUS_SPP: usize = 1 << 8;
+// 按特权规范独立列出 SIE、SPIE、VS、FS 和 XS，确保生产掩码漏位时自检仍能覆盖对应位。
+const SSTATUS_DISABLED_MASK: usize = (1 << 1) | (1 << 5) | (3 << 9) | (3 << 13) | (3 << 15);
+const SSTATUS_UXL_MASK: usize = 0b11 << 32;
+const SSTATUS_UXL_64: usize = 0b10 << 32;
+
 /// 为汇编 ABI 包装函数提供调用 [`run_user`] 的 `extern "C"` 垫片。
 ///
 /// # Safety
@@ -32,49 +44,57 @@ unsafe extern "C" fn run_user_shim(context: &mut TrapContext) {
 
 fn assert_cause_decoding() {
     let interrupt_bit = 1usize << (usize::BITS - 1);
+    let mut context = TrapContext::user(0, 0);
+    context.scause = 5;
+    assert_eq!(context.cause(), Ok(Trap::Exception(Exception::LoadFault)));
     assert_eq!(
-        TrapCause::from_scause(5),
-        TrapCause::Exception(ExceptionCause::LoadAccessFault),
+        alloc::format!("{}", context.cause_for_log()),
+        "exception: LoadFault"
+    );
+    context.scause = interrupt_bit | 5;
+    assert_eq!(
+        context.cause(),
+        Ok(Trap::Interrupt(Interrupt::SupervisorTimer)),
     );
     assert_eq!(
-        TrapCause::from_scause(interrupt_bit | 5),
-        TrapCause::Interrupt(InterruptCause::SupervisorTimer),
+        alloc::format!("{}", context.cause_for_log()),
+        "interrupt: SupervisorTimer"
     );
     for code in [10, interrupt_bit - 1] {
+        context.scause = code;
+        assert_eq!(context.cause(), Err(Trap::Exception(code)));
         assert_eq!(
-            TrapCause::from_scause(code),
-            TrapCause::Exception(ExceptionCause::Unknown(code)),
+            alloc::format!("{}", context.cause_for_log()),
+            alloc::format!("exception: unknown exception code {code}")
         );
+        assert!(!crate::arch::syscall::is_syscall(&context));
+        context.scause = interrupt_bit | code;
+        assert_eq!(context.cause(), Err(Trap::Interrupt(code)));
         assert_eq!(
-            TrapCause::from_scause(interrupt_bit | code),
-            TrapCause::Interrupt(InterruptCause::Unknown(code)),
+            alloc::format!("{}", context.cause_for_log()),
+            alloc::format!("interrupt: unknown interrupt code {code}")
         );
+        assert!(!crate::arch::syscall::is_syscall(&context));
     }
 }
 
 fn assert_kernel_environment() {
-    let scratch: usize;
-    let status: usize;
     let thread_pointer: usize;
-    // SAFETY: 在主核 S-mode 下只读查询当前 CSR 与 `tp` 寄存器，无任何副作用。
+    // SAFETY: 只读取主核的 `tp`，不修改寄存器或内存。
     unsafe {
         asm!(
-            "csrr {scratch}, sscratch",
-            "csrr {status}, sstatus",
             "mv {thread_pointer}, tp",
-            scratch = out(reg) scratch,
-            status = out(reg) status,
             thread_pointer = out(reg) thread_pointer,
             options(nomem, nostack),
         );
     }
-    assert_eq!(scratch, 0, "kernel sscratch invariant");
-    // `sret` 会按硬件规范将 `SPIE` 置 1，但 `SIE` 及浮点/向量扩展位必须保持为 0。
-    assert_eq!(
-        status & (DISABLED_STATUS & !(1 << 5)),
-        0,
-        "kernel interrupts/extensions",
-    );
+    assert_eq!(sscratch::read(), 0, "kernel sscratch invariant");
+    let status = sstatus::read();
+    // `sret` 会按硬件规范将 `SPIE` 置 1，此处不要求 `SPIE = 0`，仅检查 `SIE` 与扩展状态位。
+    assert!(!status.sie(), "kernel interrupts");
+    assert_eq!(status.fs(), FS::Off, "kernel floating-point state");
+    assert_eq!(status.vs(), VS::Off, "kernel vector state");
+    assert_eq!(status.xs(), XS::AllOff, "kernel extension state");
     assert_eq!(thread_pointer, 0, "kernel tp must not come from user state");
 }
 
@@ -95,7 +115,7 @@ fn assert_kernel_registers(context: &TrapContext) {
 
 /// 拦截并处理本测试模块专属的两个 S-mode `ebreak` 探针地址；其余内核异常返回 `false` 交由全局 panic 处理。
 pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
-    if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
+    if !context.is_breakpoint() {
         return false;
     }
     let outer = riscv_kernel_test_kernel_break as *const () as usize;
@@ -104,8 +124,8 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
         return false;
     }
     assert_kernel_environment();
-    assert_ne!(context.raw_status() & (1 << 8), 0, "kernel SPP");
-    assert_eq!(context.raw_status() & DISABLED_STATUS, 0);
+    assert_ne!(context.raw_status() & SSTATUS_SPP, 0, "kernel SPP");
+    assert_eq!(context.raw_status() & SSTATUS_DISABLED_MASK, 0);
     assert!(context.bad_addr() == 0 || context.bad_addr() == context.pc());
     if context.pc() == outer {
         assert_kernel_registers(context);
@@ -122,7 +142,7 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
         assert_eq!(context.sp() & 15, 0, "nested kernel sp alignment");
     }
     // 故意在保存的 `sstatus` 中清零 `SPP` 并置位禁用位，验证 `.Lrv_return_kernel` 能否强制修正回安全的 S-mode 状态。
-    context.sstatus = (context.sstatus & !(1 << 8)) | DISABLED_STATUS;
+    context.sstatus = (context.sstatus & !SSTATUS_SPP) | SSTATUS_DISABLED_MASK;
     context.set_pc(context.pc() + 4); // `probes.S` 已禁用压缩指令，两条 `ebreak` 均为 4 字节。
     true
 }
@@ -138,8 +158,15 @@ fn set_user_registers(context: &mut TrapContext, base: usize, stack: usize) {
 fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usize, cause: usize) {
     assert_eq!(context.pc(), pc, "user exception PC");
     assert_eq!(context.raw_cause(), cause, "user exception cause");
-    assert_eq!(context.raw_status() & ((1 << 8) | DISABLED_STATUS), 0);
-    assert_eq!(context.raw_status() & (3 << 32), USER_STATUS, "RV64 UXL");
+    assert_eq!(
+        context.raw_status() & (SSTATUS_SPP | SSTATUS_DISABLED_MASK),
+        0
+    );
+    assert_eq!(
+        context.raw_status() & SSTATUS_UXL_MASK,
+        SSTATUS_UXL_64,
+        "RV64 UXL",
+    );
     assert_eq!(context.registers()[0], 0);
     for (index, value) in context.registers().iter().enumerate().skip(1) {
         let expected = if index == 2 { stack } else { base + index };
@@ -153,7 +180,7 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     assert_cause_decoding();
     let mut kernel_call = TrapContext::user(0x1000, 0x2000);
     kernel_call.scause = 9; // S-mode `ecall` 不能当成用户态系统调用处理。
-    kernel_call.sstatus = 1 << 8;
+    kernel_call.sstatus = SSTATUS_SPP;
     crate::syscall::tests::assert_rejected(&mut kernel_call);
     assert_kernel_environment();
     // SAFETY: 汇编探针先备份调用栈 ABI 寄存器，再写入测试特征值并触发由 `handle_kernel_test` 拦截的断点。

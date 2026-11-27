@@ -6,7 +6,10 @@
 //! - 全局中断与浮点/向量扩展（`EUEN` 中的 FPE/SXE/ASXE）始终保持关闭；
 //! - 启动阶段建立的 `DMW0` 窗口仅允许 PLV0 访问，运行用户态代码需由调用方提供 PLV3 映射。
 
-use core::arch::{asm, global_asm};
+use core::{
+    arch::{asm, global_asm},
+    fmt,
+};
 
 pub mod cause;
 use cause::TrapCause;
@@ -81,6 +84,17 @@ impl TrapContext {
     #[allow(dead_code)]
     pub fn cause(&self) -> TrapCause {
         TrapCause::from_estat(self.estat)
+    }
+
+    /// 返回用于内核 Trap 日志的原因描述。
+    pub(crate) fn cause_for_log(&self) -> impl fmt::Display {
+        self.cause()
+    }
+
+    /// 判断保存的 Trap 是否为断点异常。
+    #[cfg(feature = "ktest")]
+    pub(crate) fn is_breakpoint(&self) -> bool {
+        self.cause() == TrapCause::Exception(cause::ExceptionCause::Breakpoint)
     }
 
     /// 返回保存的 `estat` 值（若来自 TLB 重填入口，第 63 位会被置为 1）。

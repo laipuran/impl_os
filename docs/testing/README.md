@@ -92,7 +92,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 探针先验证未知系统调用返回 `-ENOSYS`，再访问用户数据和栈，最后调用 `exit`。
 
 测试检查内核分段与 UART 的监管态权限、用户代码/数据/栈页的 `RXU`/`RWU` 权限和不同地址空间的独立页框。
-用户态探针验证代码页可读、仅可执行（`XU`）页可取指但读取触发 `LoadPageFault`、只读（`RU`）页可读但写入和取指分别触发 `StoreAmoPageFault` 与 `InstructionPageFault`，以及仅在一侧映射的普通用户页在另一侧触发缺页。
+用户态探针验证代码页可读、仅可执行（`XU`）页可取指但读取触发 `LoadPageFault`、只读（`RU`）页可读但写入和取指分别触发 `StorePageFault` 与 `InstructionPageFault`，以及仅在一侧映射的普通用户页在另一侧触发缺页。
 测试还检查未对齐地址查重、非法及重复映射（含零空闲页框小池下重复映射仍返回 `AlreadyMapped` 且原映射不变）。在活动态下构建地址空间、调用 `map_page`、嵌套 `with_active` 或初始化物理页均因 `UnavailableInCurrentMode` 被拒绝，不执行回调也不影响外层映射。权限探针另覆盖用户读取内核代码、UART 和根表，写代码页，访问栈保护页，以及从数据页取指产生的故障。
 软件查表在 Bare 下确认根表与中间表页均未建立同地址映射。
 正常退出与故障终止后均检查恢复未激活状态（`is_user_inactive()`）且执行前后空闲页框数一致，销毁地址空间后检查页框全部回收。

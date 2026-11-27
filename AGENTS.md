@@ -32,7 +32,7 @@
   - 严格遵守启动栈（`.bss.stack`）与 BSS 清零区间（`sbss..ebss`）的边界，以及当前单核、关中断的执行假设。
   - 底层 MMIO 访问需使用 `read_volatile` / `write_volatile`；不得将未经校验的用户态裸指针直接转换为 Rust 引用。
   - 内核发生 panic 或致命异常时必须调用 `arch::halt()` 挂起 CPU，严禁调用 `arch::shutdown()` 伪造正常关机。
-- **依赖管理**：仅引入兼容双架构的 `no_std` 依赖。新增或更新依赖前参阅 [`docs/development/README.md`](docs/development/README.md)，通过 `just vendor` 更新离线源码并一并提交 `Cargo.toml`、`Cargo.lock` 与 `vendor/`。
+- **依赖管理**：仅引入 `no_std` 依赖（通用依赖须兼容双架构，架构专用依赖须通过 `[target.'cfg(target_arch = ...)'.dependencies]` 隔离）。新增或更新依赖前参阅 [`docs/development/README.md`](docs/development/README.md)，通过 `just vendor` 更新离线源码并一并提交 `Cargo.toml`、`Cargo.lock` 与 `vendor/`。
 
 ## Rust 注释与文档规范
 
