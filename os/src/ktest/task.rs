@@ -3,10 +3,7 @@
 use core::arch::global_asm;
 
 use super::{ExitStatus, Task, TaskState};
-use crate::arch::trap::{
-    cause::{ExceptionCause, TrapCause},
-    TrapContext,
-};
+use crate::arch::trap::TrapContext;
 
 #[cfg(target_arch = "riscv64")]
 global_asm!(include_str!("task/riscv64.S"));
@@ -96,10 +93,7 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
     assert_eq!(unsafe { fault.run() }, ExitStatus::Faulted);
     assert_eq!(fault.context().pc(), fault_pc);
     assert_eq!(fault.context().registers(), &registers);
-    assert_eq!(
-        fault.context().cause(),
-        TrapCause::Exception(ExceptionCause::Breakpoint),
-    );
+    assert!(fault.context().is_breakpoint());
     #[cfg(target_arch = "riscv64")]
     {
         assert_eq!(fault.context().raw_cause(), 3);

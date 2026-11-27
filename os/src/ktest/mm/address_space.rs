@@ -1,15 +1,13 @@
 //! 通过地址空间的构造和执行接口验证真实用户权限、隔离及页框回收。
 
 use core::{arch::global_asm, convert::Infallible, ptr, slice};
+use riscv::interrupt::{Exception, Trap};
 
 use super::{init_zeroed_frame, AddressSpace, BuildError, STACK_GUARD, STACK_PAGE};
 use crate::arch::{
     paging::{Error as PagingError, Permissions},
     syscall::ARGUMENT_START,
-    trap::{
-        cause::{ExceptionCause, TrapCause},
-        TrapContext,
-    },
+    trap::TrapContext,
     user_paging::is_user_inactive,
     UART_BASE,
 };
@@ -155,9 +153,9 @@ fn run_probe(
     task
 }
 
-fn check_fault(space: &AddressSpace<'_>, entry: usize, addr: usize, cause: ExceptionCause) {
+fn check_fault(space: &AddressSpace<'_>, entry: usize, addr: usize, cause: Exception) {
     let task = run_probe(space, entry, addr, ExitStatus::Faulted);
-    assert_eq!(task.context().cause(), TrapCause::Exception(cause));
+    assert_eq!(task.context().cause(), Ok(Trap::Exception(cause)));
     assert_eq!(task.context().pc(), entry);
     assert_eq!(task.context().bad_addr(), addr);
 }
@@ -284,7 +282,7 @@ pub fn kernel_test() {
             &second,
             read_byte,
             SINGLE_SPACE_ADDRESS,
-            ExceptionCause::LoadPageFault,
+            Exception::LoadPageFault,
         );
         run_probe(
             &first,
@@ -296,19 +294,19 @@ pub fn kernel_test() {
             &first,
             read_byte,
             EXECUTE_ONLY_ADDRESS,
-            ExceptionCause::LoadPageFault,
+            Exception::LoadPageFault,
         );
         check_fault(
             &first,
             store,
             SINGLE_SPACE_ADDRESS,
-            ExceptionCause::StoreAmoPageFault,
+            Exception::StorePageFault,
         );
         check_fault(
             &first,
             SINGLE_SPACE_ADDRESS,
             SINGLE_SPACE_ADDRESS,
-            ExceptionCause::InstructionPageFault,
+            Exception::InstructionPageFault,
         );
 
         for space in [&first, &second] {
@@ -317,22 +315,17 @@ pub fn kernel_test() {
             }
         }
         let kernel = ptr::addr_of!(skernel) as usize;
-        check_fault(&first, load, kernel, ExceptionCause::LoadPageFault);
-        check_fault(&first, load, UART_BASE, ExceptionCause::LoadPageFault);
+        check_fault(&first, load, kernel, Exception::LoadPageFault);
+        check_fault(&first, load, UART_BASE, Exception::LoadPageFault);
         let root = first.table.root_address();
-        check_fault(&first, load, root, ExceptionCause::LoadPageFault);
-        check_fault(
-            &first,
-            store,
-            USER_CODE_ADDRESS,
-            ExceptionCause::StoreAmoPageFault,
-        );
-        check_fault(&first, load, STACK_GUARD, ExceptionCause::LoadPageFault);
+        check_fault(&first, load, root, Exception::LoadPageFault);
+        check_fault(&first, store, USER_CODE_ADDRESS, Exception::StorePageFault);
+        check_fault(&first, load, STACK_GUARD, Exception::LoadPageFault);
         check_fault(
             &first,
             USER_DATA_ADDRESS,
             USER_DATA_ADDRESS,
-            ExceptionCause::InstructionPageFault,
+            Exception::InstructionPageFault,
         );
         check_active_rejections(&first, &mut second, read_byte);
         frames_for_probes

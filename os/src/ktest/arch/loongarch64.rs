@@ -68,9 +68,15 @@ fn decode_test() {
             TrapCause::Exception(ExceptionCause::Unknown { code, subcode })
         );
     }
+    let mut context = TrapContext::user(0, 0);
+    context.estat = REFILL | (12 << 16) | pending;
     assert_eq!(
-        decode(REFILL | (12 << 16) | pending),
+        context.cause(),
         TrapCause::Exception(ExceptionCause::TlbRefill)
+    );
+    assert_eq!(
+        alloc::format!("{}", context.cause_for_log()),
+        "exception: TLB refill"
     );
 }
 
@@ -89,7 +95,7 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
         context.set_pc(context.pc() + 4);
         return true;
     }
-    if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
+    if !context.is_breakpoint() {
         return false;
     }
     let outer_pc = __loongarch_kernel_test_kernel_break as *const () as usize;

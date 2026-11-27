@@ -6,14 +6,18 @@
 //!   （从写 `sscratch` 到 `sret` 完成前的短暂 S-mode 过渡窗口内 `sscratch` 非零，该窗口内的 `TrapContext` 访存绝不能触发异常）；
 //! - 浮点、向量与扩展状态位（`FS`/`VS`/`XS`）始终保持关闭（`Off`），用户或内核执行扩展指令会触发非法指令异常。
 
-use core::arch::{asm, global_asm};
-use riscv::register::{
-    sstatus::XLEN,
-    stvec::{self, Stvec, TrapMode},
+use core::{
+    arch::{asm, global_asm},
+    fmt,
 };
-
-pub mod cause;
-use cause::TrapCause;
+use riscv::{
+    interrupt::{Exception, Interrupt, Trap},
+    register::{
+        scause::Scause,
+        sstatus::XLEN,
+        stvec::{self, Stvec, TrapMode},
+    },
+};
 
 // UXL = 64 位；SPP、SPIE、SIE、FS、VS、XS 均置 0。
 const USER_STATUS: usize = XLEN::XLEN64.into_usize() << 32;
@@ -119,9 +123,25 @@ impl TrapContext {
         self.gpr[2]
     }
 
-    /// 将保存的 `scause` 解码为类型化的 [`TrapCause`]。
-    pub fn cause(&self) -> TrapCause {
-        TrapCause::from_scause(self.scause)
+    /// 将保存的 `scause` 解码为标准 S-mode 中断或异常。
+    ///
+    /// # Errors
+    ///
+    /// 编码不属于标准枚举时，返回原始原因码及其中断或异常分类。
+    pub fn cause(&self) -> Result<Trap<Interrupt, Exception>, Trap<usize, usize>> {
+        let raw = Scause::from_bits(self.scause).cause();
+        raw.try_into().map_err(|_| raw)
+    }
+
+    /// 返回用于内核 Trap 日志的原因描述。
+    pub(crate) fn cause_for_log(&self) -> impl fmt::Display + '_ {
+        CauseDisplay(self)
+    }
+
+    /// 判断保存的 Trap 是否为断点异常。
+    #[cfg(feature = "ktest")]
+    pub(crate) fn is_breakpoint(&self) -> bool {
+        self.cause() == Ok(Trap::Exception(Exception::Breakpoint))
     }
 
     /// 返回原始的 `scause` 寄存器值（含最高位中断标志）。
@@ -137,6 +157,19 @@ impl TrapContext {
     /// 返回保存的 `stval` 寄存器值（故障地址或非法指令编码，无意义时为 0）。
     pub fn bad_addr(&self) -> usize {
         self.stval
+    }
+}
+
+struct CauseDisplay<'a>(&'a TrapContext);
+
+impl fmt::Display for CauseDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.cause() {
+            Ok(Trap::Interrupt(cause)) => write!(f, "interrupt: {cause:?}"),
+            Ok(Trap::Exception(cause)) => write!(f, "exception: {cause:?}"),
+            Err(Trap::Interrupt(code)) => write!(f, "interrupt: unknown interrupt code {code}"),
+            Err(Trap::Exception(code)) => write!(f, "exception: unknown exception code {code}"),
+        }
     }
 }
 

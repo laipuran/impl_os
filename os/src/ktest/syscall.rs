@@ -3,10 +3,7 @@
 use core::arch::global_asm;
 
 use super::{complete, decode, SyscallRequest};
-use crate::arch::trap::{
-    cause::{ExceptionCause, TrapCause},
-    run_user, TrapContext,
-};
+use crate::arch::trap::{run_user, TrapContext};
 
 #[cfg(target_arch = "riscv64")]
 global_asm!(include_str!("syscall/riscv64.S"));
@@ -141,10 +138,7 @@ pub unsafe fn kernel_test(user_entry: usize, stack: usize) {
         context.pc(),
         user_entry + (syscall_test_done as *const () as usize - entry()),
     );
-    assert_eq!(
-        context.cause(),
-        TrapCause::Exception(ExceptionCause::Breakpoint)
-    );
+    assert!(context.is_breakpoint());
     assert_rejected(&mut context);
     crate::println!("{}: syscall ABI tests passed", crate::arch::NAME);
 }

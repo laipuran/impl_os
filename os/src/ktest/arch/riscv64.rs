@@ -1,12 +1,14 @@
 //! RISC-V 64 Trap 与特权级切换自检（仅在启用 `ktest` feature 时编译）。
 
 use core::arch::{asm, global_asm};
-use riscv::register::{
-    sscratch,
-    sstatus::{self, FS, VS, XS},
+use riscv::{
+    interrupt::{Exception, Interrupt, Trap},
+    register::{
+        sscratch,
+        sstatus::{self, FS, VS, XS},
+    },
 };
 
-use super::cause::{ExceptionCause, InterruptCause, TrapCause};
 use super::{run_user, TrapContext, DISABLED_STATUS};
 
 global_asm!(include_str!("riscv64/probes.S"), run_user_shim = sym run_user_shim);
@@ -39,23 +41,37 @@ unsafe extern "C" fn run_user_shim(context: &mut TrapContext) {
 
 fn assert_cause_decoding() {
     let interrupt_bit = 1usize << (usize::BITS - 1);
+    let mut context = TrapContext::user(0, 0);
+    context.scause = 5;
+    assert_eq!(context.cause(), Ok(Trap::Exception(Exception::LoadFault)));
     assert_eq!(
-        TrapCause::from_scause(5),
-        TrapCause::Exception(ExceptionCause::LoadAccessFault),
+        alloc::format!("{}", context.cause_for_log()),
+        "exception: LoadFault"
+    );
+    context.scause = interrupt_bit | 5;
+    assert_eq!(
+        context.cause(),
+        Ok(Trap::Interrupt(Interrupt::SupervisorTimer)),
     );
     assert_eq!(
-        TrapCause::from_scause(interrupt_bit | 5),
-        TrapCause::Interrupt(InterruptCause::SupervisorTimer),
+        alloc::format!("{}", context.cause_for_log()),
+        "interrupt: SupervisorTimer"
     );
     for code in [10, interrupt_bit - 1] {
+        context.scause = code;
+        assert_eq!(context.cause(), Err(Trap::Exception(code)));
         assert_eq!(
-            TrapCause::from_scause(code),
-            TrapCause::Exception(ExceptionCause::Unknown(code)),
+            alloc::format!("{}", context.cause_for_log()),
+            alloc::format!("exception: unknown exception code {code}")
         );
+        assert!(!crate::arch::syscall::is_syscall(&context));
+        context.scause = interrupt_bit | code;
+        assert_eq!(context.cause(), Err(Trap::Interrupt(code)));
         assert_eq!(
-            TrapCause::from_scause(interrupt_bit | code),
-            TrapCause::Interrupt(InterruptCause::Unknown(code)),
+            alloc::format!("{}", context.cause_for_log()),
+            alloc::format!("interrupt: unknown interrupt code {code}")
         );
+        assert!(!crate::arch::syscall::is_syscall(&context));
     }
 }
 
@@ -96,7 +112,7 @@ fn assert_kernel_registers(context: &TrapContext) {
 
 /// 拦截并处理本测试模块专属的两个 S-mode `ebreak` 探针地址；其余内核异常返回 `false` 交由全局 panic 处理。
 pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
-    if context.cause() != TrapCause::Exception(ExceptionCause::Breakpoint) {
+    if !context.is_breakpoint() {
         return false;
     }
     let outer = riscv_kernel_test_kernel_break as *const () as usize;
