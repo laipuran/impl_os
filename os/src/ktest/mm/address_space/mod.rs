@@ -1,8 +1,8 @@
 //! 通过地址空间的构造和执行接口验证真实用户权限、隔离及页框回收。
 
-use core::{arch::global_asm, ptr, slice};
+use core::{arch::global_asm, convert::Infallible, ptr, slice};
 
-use super::{AddressSpace, STACK_GUARD, STACK_PAGE};
+use super::{init_zeroed_frame, AddressSpace, BuildError, STACK_GUARD, STACK_PAGE};
 use crate::arch::{
     paging::{Error as PagingError, Permissions},
     syscall::ARGUMENT_START,
@@ -10,7 +10,7 @@ use crate::arch::{
         cause::{ExceptionCause, TrapCause},
         TrapContext,
     },
-    user_paging::{init_zeroed_frame, is_user_inactive},
+    user_paging::is_user_inactive,
     UART_BASE,
 };
 use crate::ktest::support::frames::with_small_pool;
@@ -59,7 +59,7 @@ fn with_probes(mut space: AddressSpace<'_>, initial: u8) -> AddressSpace<'_> {
 
 fn new_space(initial: u8) -> AddressSpace<'static> {
     // SAFETY: 自检在关中断的 S-mode 启动主核上执行，已初始化的全局分配器管理独占真实 RAM。
-    let space = unsafe { AddressSpace::new() }.unwrap();
+    let space = unsafe { AddressSpace::new_in(crate::mm::frames()) }.unwrap();
     with_probes(space, initial)
 }
 
@@ -182,7 +182,13 @@ fn check_active_rejections(
         first
             .with_active(|| {
                 assert!(!is_user_inactive());
-                assert_eq!(AddressSpace::new().err(), Some(UnavailableInCurrentMode));
+                let build = AddressSpace::with_stack_in(frames, |_| -> Result<(), Infallible> {
+                    panic!("stack initializer should not run")
+                });
+                assert_eq!(
+                    build.err(),
+                    Some(BuildError::Mapping(UnavailableInCurrentMode))
+                );
                 assert_eq!(
                     second.map_page(SINGLE_SPACE_ADDRESS, Access::Read, 0, &[99]),
                     Err(UnavailableInCurrentMode),
@@ -192,7 +198,7 @@ fn check_active_rejections(
                     Err(UnavailableInCurrentMode),
                 );
                 assert_eq!(
-                    init_zeroed_frame::<(), UserMappingError>(&mut frame, |_| {
+                    init_zeroed_frame::<()>(&mut frame, |_| {
                         panic!("frame initializer should not run")
                     }),
                     Err(UnavailableInCurrentMode),
@@ -211,7 +217,8 @@ fn check_active_rejections(
 fn duplicate_when_exhausted(frames: &FrameAllocator, count: usize, read_byte: usize) {
     with_small_pool(frames, count, |pool| {
         // SAFETY: 自检在关中断的 S-mode 启动主核上运行，小池独占借出的真实 RAM 页框。
-        let mut space = with_probes(unsafe { AddressSpace::new_in(pool) }.unwrap(), 53);
+        let space = unsafe { AddressSpace::new_in(pool) }.unwrap();
+        let mut space = with_probes(space, 53);
         assert_eq!(pool.available(), 0);
         let original = space.table.translate(USER_DATA_ADDRESS).unwrap();
         assert_eq!(

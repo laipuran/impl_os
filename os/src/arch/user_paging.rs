@@ -1,8 +1,7 @@
-//! 选择当前目标的用户分页与物理页初始化实现。地址空间由共享内存管理层持有。
+//! 选择当前目标的用户分页后端及物理页框地址转换方式。
 
-pub(crate) use super::riscv64::paging::{
-    sv39_user_root::{Sv39UserRoot as UserRoot, USER_END},
-    user_frame::init_zeroed_frame,
+pub(crate) use super::riscv64::paging::sv39_user_root::{
+    frame_ptr, Sv39UserRoot as UserRoot, USER_END,
 };
 
 /// 检查当前是否未激活用户地址空间。

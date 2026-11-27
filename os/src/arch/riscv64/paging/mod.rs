@@ -10,7 +10,6 @@ use crate::mm::frame::{Frame, FrameAllocator, PAGE_SIZE};
 mod csr;
 mod pte;
 pub(in crate::arch) mod sv39_user_root;
-pub(in crate::arch) mod user_frame;
 
 use pte::Entry;
 

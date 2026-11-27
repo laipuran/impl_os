@@ -2,7 +2,7 @@
 
 use core::{arch::global_asm, ptr, slice};
 
-use super::{Error, LoadedProgram};
+use super::{elf, Error, LoadedProgram};
 use crate::{
     arch,
     ktest::support::{elf as elf_fixture, frames::with_small_pool},
@@ -10,7 +10,6 @@ use crate::{
         self,
         address_space::AddressSpace,
         frame::{FrameAllocator, PAGE_SIZE},
-        UserMappingError,
     },
     task::{user_stack, ExitStatus},
 };
@@ -161,7 +160,7 @@ fn check_oom(frames: &FrameAllocator, image: &[u8], needed: usize) {
         with_small_pool(frames, capacity, |pool| {
             assert_eq!(
                 load(pool, image).err(),
-                Some(Error::Memory(UserMappingError::OutOfMemory)),
+                Some(Error::OutOfMemory),
                 "页框池容量 {capacity}"
             );
         });
@@ -174,6 +173,27 @@ fn check_oom(frames: &FrameAllocator, image: &[u8], needed: usize) {
     });
 }
 
+fn check_active_rejection(frames: &FrameAllocator, image: &[u8]) {
+    let before = frames.available();
+    let program = load(frames, image).unwrap();
+    let active = frames.available();
+    // SAFETY: 自检在关中断的 S-mode 启动主核上执行；栈、镜像和分配器元数据保持同址可访问。
+    // 再次装载只解析内核镜像，构建根页表时即拒绝活动态，不访问未映射的页框。
+    unsafe {
+        program
+            .space
+            .with_active(|| {
+                assert_eq!(load(frames, image).err(), Some(Error::PagingUnavailable));
+                assert_eq!(frames.available(), active);
+                assert!(!arch::user_paging::is_user_inactive());
+            })
+            .unwrap();
+    }
+    assert!(arch::user_paging::is_user_inactive());
+    drop(program);
+    assert_eq!(frames.available(), before);
+}
+
 fn check_load_rejections(frames: &FrameAllocator, image: &mut [u8]) {
     static OVERSIZED_ARG: [u8; PAGE_SIZE] = [b'x'; PAGE_SIZE];
     let load_err = |image: &[u8], argv: &[&[u8]]| {
@@ -182,8 +202,20 @@ fn check_load_rejections(frames: &FrameAllocator, image: &mut [u8]) {
     };
     let before = frames.available();
     assert_eq!(
+        load_err(&[], &[]),
+        Some(Error::InvalidElf(elf::Error::TruncatedHeader))
+    );
+    assert_eq!(frames.available(), before);
+
+    assert_eq!(
         load_err(image, &[&OVERSIZED_ARG]),
-        Some(Error::Stack(user_stack::Error::InsufficientSpace))
+        Some(Error::StackTooLarge)
+    );
+    assert_eq!(frames.available(), before);
+
+    assert_eq!(
+        load_err(image, &[b"invalid\0arg"]),
+        Some(Error::InvalidStackArguments)
     );
     assert_eq!(frames.available(), before);
 
@@ -202,10 +234,7 @@ fn check_load_rejections(frames: &FrameAllocator, image: &mut [u8]) {
         data_header + elf_fixture::PH_VADDR,
         (AddressSpace::STACK_TOP - PAGE_SIZE + DATA_OFFSET) as u64,
     );
-    assert_eq!(
-        load_err(image, &[]),
-        Some(Error::Memory(UserMappingError::InvalidUserAddress))
-    );
+    assert_eq!(load_err(image, &[]), Some(Error::InvalidSegmentAddress));
     assert_eq!(frames.available(), before);
     assert!(arch::user_paging::is_user_inactive());
 }
@@ -217,6 +246,7 @@ pub(crate) fn kernel_test() {
     write_image(&mut image, PhdrLayout::Readable);
     let needed = check_execution(frames, &image, PhdrLayout::Readable);
     check_oom(frames, &image, needed);
+    check_active_rejection(frames, &image);
     check_load_rejections(frames, &mut image);
 
     for layout in [PhdrLayout::ExecuteOnly, PhdrLayout::Uncovered] {
