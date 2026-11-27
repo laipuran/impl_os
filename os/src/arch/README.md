@@ -19,7 +19,7 @@
 
 - `user_paging.rs`：汇总当前架构的用户分页接口与物理页框地址转换，隔离共享内存层与具体 ISA。
 - `riscv64.rs`：面向 QEMU `virt`（S-mode 启动），通过 OpenSBI 执行关机，直接用物理地址访问 16550 UART。
-- `riscv64/paging.rs`：`PageTable` 管理 Sv39 4 KiB 映射、软件查表、表页所有权和作用域激活；`paging/sv39_user_root.rs` 的 `Sv39UserRoot` 负责用户根页表的平台映射、用户叶页映射与激活，同模块的 `frame_ptr` 在 Bare 下返回物理页框的同址裸指针，由 `mm` 清零和初始化；`paging/pte.rs` 封装硬件编码，`paging/csr.rs` 封装 `satp` 读取、切换前后的 `sfence.vma` 同步与回读确认。
+- `riscv64/paging.rs`：`PageTable` 管理 Sv39 4 KiB 映射、软件查表、表页所有权和作用域激活；`riscv64/paging/sv39_user_root.rs` 的 `Sv39UserRoot` 负责用户根页表的平台映射、用户叶页映射与激活，同模块的 `frame_ptr` 在 Bare 下返回物理页框的同址裸指针，由 `mm` 清零和初始化；`riscv64/paging/pte.rs` 封装硬件编码，`riscv64/paging/csr.rs` 封装 `satp` 读取、切换前后的 `sfence.vma` 同步与回读确认。
 - `loongarch64.rs`：面向 QEMU `virt` 直接加载 ELF 启动（PLV0），在入口汇编中配置 `DMW0`（`0x9000_0000_0000_0000`）高地址直接映射窗口，通过 QEMU 传入的 EFI 系统表定位设备树（FDT）与 initrd。
 - `boot_data.rs`：双架构共用的 FDT 原始内存借用封装 `MappedFdt`。负责将“从裸指针验证头部与容量上限并构造切片”的 `unsafe` 操作集中在一处，随后交由纯安全的 `mm::fdt` 解析，并自动将 FDT 自身占用的物理区间加入保留列表。
 

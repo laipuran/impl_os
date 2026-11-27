@@ -2,7 +2,7 @@
 
 use core::arch::{asm, global_asm};
 
-global_asm!(include_str!("./riscv64/entry.S"));
+global_asm!(include_str!("riscv64/entry.S"));
 
 pub(crate) mod boot;
 pub(crate) mod paging;
