@@ -2,7 +2,7 @@
 
 use core::{arch::global_asm, ptr, slice};
 
-use super::{elf, Error, LoadedProgram};
+use super::{elf, Error, Program};
 use crate::{
     arch,
     ktest::support::{elf as elf_fixture, frames::with_small_pool},
@@ -126,9 +126,9 @@ fn write_image(image: &mut [u8; IMAGE_SIZE], layout: PhdrLayout) {
     );
 }
 
-fn load<'a>(pool: &'a FrameAllocator, image: &[u8]) -> Result<LoadedProgram<'a>, Error> {
+fn load<'a>(pool: &'a FrameAllocator, image: &[u8]) -> Result<Program<'a>, Error> {
     // SAFETY: 自检在关中断的 S-mode 启动主核上执行；调用方只传入共享夹具从真实 RAM 借出的独占页框池。
-    unsafe { LoadedProgram::load_in(pool, image, &[ARGV0], &[ENVP0]) }
+    unsafe { Program::load_from_bytes_in(pool, image, &[ARGV0], &[ENVP0]) }
 }
 
 fn check_execution(frames: &FrameAllocator, image: &[u8], layout: PhdrLayout) -> usize {
@@ -198,7 +198,7 @@ fn check_load_rejections(frames: &FrameAllocator, image: &mut [u8]) {
     static OVERSIZED_ARG: [u8; PAGE_SIZE] = [b'x'; PAGE_SIZE];
     let load_err = |image: &[u8], argv: &[&[u8]]| {
         // SAFETY: 当前为关中断的 S-mode 启动主核，全局分配器已初始化并管理独占的真实 RAM。
-        unsafe { LoadedProgram::load(image, argv, &[]) }.err()
+        unsafe { Program::load_from_bytes(image, argv, &[]) }.err()
     };
     let before = frames.available();
     assert_eq!(

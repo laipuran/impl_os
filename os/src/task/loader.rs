@@ -45,12 +45,12 @@ pub(crate) enum Error {
 }
 
 /// 同一次装载产生的用户地址空间和初始任务。
-pub(crate) struct LoadedProgram<'a> {
+pub(crate) struct Program<'a> {
     space: AddressSpace<'a>,
     task: Task,
 }
 
-impl LoadedProgram<'static> {
+impl Program<'static> {
     /// 使用全局页框分配器装载静态 ELF，并在物理栈页上原位构建初始用户栈。
     ///
     /// 当前仅承诺最小启动 ABI：提供 `AT_ENTRY`、`AT_PAGESZ`，并在整张程序头表完整落在可读（`PF_R`）加载段内时成组提供 `AT_PHDR`、`AT_PHENT`、`AT_PHNUM`；在接入可信熵源前不提供 `AT_RANDOM`。
@@ -76,23 +76,27 @@ impl LoadedProgram<'static> {
         not(feature = "ktest"),
         expect(dead_code, reason = "正常启动尚不装载用户程序")
     )]
-    pub(crate) unsafe fn load(image: &[u8], argv: &[&[u8]], envp: &[&[u8]]) -> Result<Self, Error> {
+    pub(crate) unsafe fn load_from_bytes(
+        image: &[u8],
+        argv: &[&[u8]],
+        envp: &[&[u8]],
+    ) -> Result<Self, Error> {
         // SAFETY: 调用方保证启动执行环境及全局分配器满足装载要求。
-        unsafe { Self::load_in(mm::frames(), image, argv, envp) }
+        unsafe { Self::load_from_bytes_in(mm::frames(), image, argv, envp) }
     }
 }
 
-impl<'a> LoadedProgram<'a> {
+impl<'a> Program<'a> {
     /// 使用指定页框分配器装载静态 ELF，并在物理栈页上原位构建初始用户栈。
     ///
     /// # Errors
     ///
-    /// 返回与 [`LoadedProgram::load`] 相同的装载错误，失败时回收本次已分配的全部页框。
+    /// 返回与 [`Program::load_from_bytes`] 相同的装载错误，失败时回收本次已分配的全部页框。
     ///
     /// # Safety
     ///
     /// 调用方须满足 [`AddressSpace::with_stack_in`] 对执行环境和分配器的全部安全前提。
-    unsafe fn load_in(
+    unsafe fn load_from_bytes_in(
         frames: &'a FrameAllocator,
         image: &[u8],
         argv: &[&[u8]],
