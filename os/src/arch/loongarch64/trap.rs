@@ -112,8 +112,8 @@ const _: () = {
 };
 
 global_asm!(
-    include_str!("./trap/entry.S"),
-    include_str!("./trap/return.S"),
+    include_str!("trap/entry.S"),
+    include_str!("trap/return.S"),
     frame_size = const core::mem::size_of::<TrapContext>(),
     gpr = const core::mem::offset_of!(TrapContext, gpr),
     word = const core::mem::size_of::<usize>(),

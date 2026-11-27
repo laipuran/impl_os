@@ -87,7 +87,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ### 3.5 RISC-V 用户地址空间测试（`user address space`）
 
-`just test rv` 和 `just test rv debug` 在 `Sv39 paging` 之后运行此组，源码与探针位于 [`os/src/ktest/mm/address_space/`](../../os/src/ktest/mm/address_space/)。
+`just test rv` 和 `just test rv debug` 在 `Sv39 paging` 之后运行此组，测试代码位于 [`os/src/ktest/mm/address_space.rs`](../../os/src/ktest/mm/address_space.rs)，汇编探针位于 [`os/src/ktest/mm/address_space/riscv64.S`](../../os/src/ktest/mm/address_space/riscv64.S)。
 测试使用正式地址空间接口构造两个用户根，交替运行使用相同用户虚拟地址的固定探针，检查各自数据独立且跨轮保留。
 探针先验证未知系统调用返回 `-ENOSYS`，再访问用户数据和栈，最后调用 `exit`。
 
@@ -107,7 +107,7 @@ just test rv debug   # 运行 RISC-V (debug) 自检
 
 ### 3.7 RISC-V 静态 ELF 执行（`static ELF execution`）
 
-`just test rv` 与 `just test rv debug` 运行此组，源码与探针位于 [`os/src/ktest/task/loader/`](../../os/src/ktest/task/loader/)。
+`just test rv` 与 `just test rv debug` 运行此组，测试代码位于 [`os/src/ktest/task/loader.rs`](../../os/src/ktest/task/loader.rs)，汇编探针位于 [`os/src/ktest/task/loader/riscv64.S`](../../os/src/ktest/task/loader/riscv64.S)。
 测试在预先填充非零脏字节（`0xa5`）的小页框池上装载含用户探针的 ELF 镜像，在 U-mode 验证初始栈 16 字节对齐、以奇地址 `argv[0]` 逐字节 `lbu` 核对完整 `argv`/`envp` 及空终止符、按键扫描 `auxv` 核对 `AT_ENTRY`/`AT_PAGESZ` 与成组程序头项。
 同时覆盖可读（实测 U-mode 读取 `AT_PHDR` 程序头）、仅 `PF_X` 与未覆盖三种程序头表布局，并验证跨页文件数据、页首/BSS/页尾全清零及数据段可写性。
 测试用容量为 `0..needed` 的小页框池逐一验证中途 OOM 返回 `OutOfMemory` 并回收已分配页框；另验证无效 ELF、W+X 权限、越界段、启动栈容量不足、参数内嵌空字节及活动态下再次装载分别返回对应的装载错误，执行前后均核验地址转换状态与页框回收。
