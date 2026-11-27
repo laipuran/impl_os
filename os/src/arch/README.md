@@ -31,7 +31,7 @@
 
 - `trap.rs`：定义保存通用寄存器与关键异常 CSR 的 `TrapContext`，提供访问 PC、SP、通用寄存器和异常原因的统一方法。结构体字段保持私有，防止外部直接篡改特权级或中断状态位。
   RISC-V 的 `cause()` 解码现场保存的 `scause`，标准原因返回 `riscv` 的 `Trap<Interrupt, Exception>`，未知原因保留中断或异常分类及原始编号。
-- LoongArch 的 `trap/cause.rs`：将 `ESTAT` 及软件标记的 TLB 重填解码为 `TrapCause` 枚举。
+- [`loongarch64/trap/cause.rs`](loongarch64/trap/cause.rs)：将 LoongArch 的 `ESTAT` 及软件标记的 TLB 重填解码为 `TrapCause` 枚举。
 - `trap/entry.S` 与 `trap/return.S`：实现内核态 Trap 与用户态往返切换（`run_user`）。
   - 执行 `run_user` 时，先把当前内核调用栈的被调用者保存寄存器存入栈帧，再加载 `TrapContext` 降权进入用户态。
   - 用户态触发任何异常或系统调用时，汇编直接把用户寄存器写回调用方传入的 `TrapContext`，随后恢复内核被调用者保存寄存器并从 `run_user` 返回。

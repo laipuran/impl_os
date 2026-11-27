@@ -9,7 +9,7 @@ use riscv::{
     },
 };
 
-use super::{run_user, TrapContext, DISABLED_STATUS};
+use super::{run_user, TrapContext};
 
 global_asm!(include_str!("riscv64/probes.S"), run_user_shim = sym run_user_shim);
 
@@ -25,6 +25,9 @@ extern "C" {
     fn riscv_kernel_test_user_float();
 }
 
+const SSTATUS_SPP: usize = 1 << 8;
+// 按特权规范独立列出 SIE、SPIE、VS、FS 和 XS，确保生产掩码漏位时自检仍能覆盖对应位。
+const SSTATUS_DISABLED_MASK: usize = (1 << 1) | (1 << 5) | (3 << 9) | (3 << 13) | (3 << 15);
 const SSTATUS_UXL_MASK: usize = 0b11 << 32;
 const SSTATUS_UXL_64: usize = 0b10 << 32;
 
@@ -121,8 +124,8 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
         return false;
     }
     assert_kernel_environment();
-    assert_ne!(context.raw_status() & (1 << 8), 0, "kernel SPP");
-    assert_eq!(context.raw_status() & DISABLED_STATUS, 0);
+    assert_ne!(context.raw_status() & SSTATUS_SPP, 0, "kernel SPP");
+    assert_eq!(context.raw_status() & SSTATUS_DISABLED_MASK, 0);
     assert!(context.bad_addr() == 0 || context.bad_addr() == context.pc());
     if context.pc() == outer {
         assert_kernel_registers(context);
@@ -139,7 +142,7 @@ pub fn handle_kernel_test(context: &mut TrapContext) -> bool {
         assert_eq!(context.sp() & 15, 0, "nested kernel sp alignment");
     }
     // 故意在保存的 `sstatus` 中清零 `SPP` 并置位禁用位，验证 `.Lrv_return_kernel` 能否强制修正回安全的 S-mode 状态。
-    context.sstatus = (context.sstatus & !(1 << 8)) | DISABLED_STATUS;
+    context.sstatus = (context.sstatus & !SSTATUS_SPP) | SSTATUS_DISABLED_MASK;
     context.set_pc(context.pc() + 4); // `probes.S` 已禁用压缩指令，两条 `ebreak` 均为 4 字节。
     true
 }
@@ -155,7 +158,10 @@ fn set_user_registers(context: &mut TrapContext, base: usize, stack: usize) {
 fn assert_user_context(context: &TrapContext, base: usize, stack: usize, pc: usize, cause: usize) {
     assert_eq!(context.pc(), pc, "user exception PC");
     assert_eq!(context.raw_cause(), cause, "user exception cause");
-    assert_eq!(context.raw_status() & ((1 << 8) | DISABLED_STATUS), 0);
+    assert_eq!(
+        context.raw_status() & (SSTATUS_SPP | SSTATUS_DISABLED_MASK),
+        0
+    );
     assert_eq!(
         context.raw_status() & SSTATUS_UXL_MASK,
         SSTATUS_UXL_64,
@@ -174,7 +180,7 @@ pub fn kernel_test(env: &mut crate::ktest::user_env::UserEnv) {
     assert_cause_decoding();
     let mut kernel_call = TrapContext::user(0x1000, 0x2000);
     kernel_call.scause = 9; // S-mode `ecall` 不能当成用户态系统调用处理。
-    kernel_call.sstatus = 1 << 8;
+    kernel_call.sstatus = SSTATUS_SPP;
     crate::syscall::tests::assert_rejected(&mut kernel_call);
     assert_kernel_environment();
     // SAFETY: 汇编探针先备份调用栈 ABI 寄存器，再写入测试特征值并触发由 `handle_kernel_test` 拦截的断点。
